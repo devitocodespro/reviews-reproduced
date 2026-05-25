@@ -1,0 +1,41 @@
+[project]
+name = "reproduction-igel-mora-riollet-1995"
+version = "0.1.0"
+description = "Devito reproduction of Igel-Mora-Riollet (1995) anisotropic SSG: truncated-sinc-Gaussian derivative coefficients + cross-derivative averaging for off-diagonal C16/C26 coupling"
+authors = [{ name = "Gerard Gorman", email = "gerard@devitocodes.com" }]
+requires-python = ">=3.10"
+
+# Pinned to Devito mainline at the same SHA as the Virieux/Levander
+# folders for cross-validation against those reproductions.
+# uv.lock pins the exact SHA at sync time.
+#
+# This reproduction's canonical claims (all byte-checkable against
+# the paper's Eq 47 + Table 1 + Fig 6/7):
+#   1. Triclinic Cij matrix (Eq 47) loaded byte-exact.
+#   2. 8-point truncated-sinc-Gaussian stencil coefficients (Table 1)
+#      d_T* + d_P* byte-match for L=8, N=1..4.
+#   3. Max relative phase-velocity error at 30%/70% Nyquist for
+#      qP/qS1/qS2 within the paper's quoted bounds (~0.05% / 0.05% /
+#      0.15% at 30%; 2% / 3% / 7% at 70%).
+#
+# These quantitative anchors satisfy the repo-wide reproduction-as-
+# prerequisite gate (see parent repo
+# tests/test_reproduction_prerequisites.py) and are stronger evidence
+# than figure-only reproduction would provide.
+
+dependencies = [
+    "devito>=4.8.0",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "matplotlib>=3.8",
+    "sympy>=1.13",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+packages = []
