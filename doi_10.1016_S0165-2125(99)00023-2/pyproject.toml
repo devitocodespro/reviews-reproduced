@@ -1,0 +1,40 @@
+[project]
+name = "reproduction-saenger-gold-shapiro-2000"
+version = "0.1.0"
+description = "Devito reproduction of Saenger, Gold & Shapiro (2000) — rotated-staggered grid for elastic-wave FD modeling: stability bounds (Eq 27/28) + dispersion comparison (Eq 36+) vs SSG (Eq 30+)"
+authors = [{ name = "Gerard Gorman", email = "gerard@devitocodes.com" }]
+requires-python = ">=3.10"
+
+# Pinned to Devito mainline at the same SHA as the Virieux/Levander/Igel
+# folders for cross-validation. uv.lock pins the exact SHA at sync time.
+#
+# This reproduction's canonical claims (all byte-checkable against
+# the paper's Eq 27/28/30 + Eq 36-39 + Fig 5/6/7):
+#   1. RSG stencil coefficient sum at SO=4 (Levander/Holberg weights
+#      c1 = 9/8, c2 = -1/24) gives Sum|c_k| = 7/6 -> CFL_RSG <= 6/7
+#      per Eq 28. Compared to SSG 2D Eq 30: CFL_SSG_2D <= 6/(7*sqrt(2)).
+#   2. RSG dispersion relation (Eq 36-39, cos*cos product form)
+#      reproduces qP/qS phase-velocity ratio at sampled PPW values.
+#   3. Phase-velocity error at PPW = 10 stays below the
+#      paper-quoted ~0.5% (Saenger 2000 Fig 6/7) at the canonical
+#      isotropic config (Vp=2.5, Vs=1.5, rho=1.0 km/s, g/cm^3).
+#
+# These quantitative anchors satisfy the repo-wide reproduction-as-
+# prerequisite gate (see parent repo
+# tests/test_reproduction_prerequisites.py) and are stronger evidence
+# than figure-only reproduction would provide.
+
+dependencies = [
+    "devito>=4.8.0",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+packages = []

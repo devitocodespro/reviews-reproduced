@@ -1,0 +1,38 @@
+[project]
+name = "reproduction-bohlen-saenger-2004"
+version = "0.1.0"
+description = "Devito reproduction of Bohlen & Saenger (2004) — RSG 2x2 arithmetic corner-averaging of cell-centre density for Rayleigh-wave accuracy at sharp rho contrasts"
+authors = [{ name = "Gerard Gorman", email = "gerard@devitocodes.com" }]
+requires-python = ">=3.10"
+
+# Pinned to Devito mainline at the same SHA as the other reproduction
+# folders. uv.lock pins the exact SHA at sync time.
+#
+# This reproduction's canonical claims (all byte-checkable):
+#   1. The 2x2 corner-averaging recipe: rho_corner(i+1/2, j+1/2)
+#      = (rho[i,j] + rho[i+1,j] + rho[i,j+1] + rho[i+1,j+1]) / 4
+#      byte-matches the BS04 paper prescription.
+#   2. At a sharp rho contrast, the corner-averaged value at the
+#      interface equals the arithmetic mean of the two sides
+#      (NOT a harmonic / geometric / heuristic mean).
+#   3. The 2x2 stencil is dimension-independent: applies the
+#      same way regardless of which axis carries the contrast.
+#   4. The averaging preserves shape: input (Nx, Ny) -> output
+#      (Nx, Ny) via replicate-extend boundary handling.
+#
+# These quantitative anchors satisfy the repo-wide reproduction-as-
+# prerequisite gate (see parent repo
+# tests/test_reproduction_prerequisites.py).
+
+dependencies = [
+    "numpy>=1.26",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+packages = []
