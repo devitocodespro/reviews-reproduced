@@ -1,7 +1,7 @@
 # reviews-reproduced — Reproduction Methodology
 
 This repository is a companion to
-[`devitocodes/reviews`](https://github.com/devitocodes/reviews) — the
+[`devitocodespro/devito-fd-survey`](https://github.com/devitocodespro/devito-fd-survey) — the
 TTI finite-difference methods review. Each subdirectory in this repo
 is a **standalone Devito-based reproduction** of one published paper,
 named by DOI, with its own report, tests, and dependency stack.
@@ -46,7 +46,7 @@ reviews-reproduced/
    another paper's folder.
 2. A reproduction frozen to a specific paper at a specific Devito
    version must remain frozen — even when the parent
-   `devitocodes/reviews` repo evolves.
+   `devitocodespro/devito-fd-survey` repo evolves.
 3. The reproduction's `pyproject.toml` pins the EXACT Devito commit
    that produces the reference outputs. A reader can `uv sync` and
    immediately reproduce the figures.
@@ -56,7 +56,7 @@ Concretely:
 - **No cross-folder imports.** If two reproductions need the same
   helper code, that helper is duplicated (not symlinked) in both
   folders. Convergence on a shared abstraction happens upstream in
-  `devitocodes/reviews/core/`, not here.
+  `devitocodespro/devito-fd-survey/core/`, not here.
 - **Per-folder venv.** `uv sync` in `doi_<DOI>/` creates `.venv/` in
   that folder. Tests run as `uv run pytest tests/`.
 - **No top-level imports.** The repo root has no Python package; it
@@ -181,7 +181,7 @@ Before declaring a reproduction "done", run a graduation review
 using the parent repo's tooling:
 
 ```bash
-# From the parent devitocodes/reviews repo:
+# From the parent devitocodespro/devito-fd-survey repo:
 make graduation_review METHOD=<corresponding_method_id>
 # OR for a standalone reproduction:
 python scripts/graduation_review.py --path reviews-reproduced/doi_<DOI>/
@@ -226,7 +226,7 @@ Record the verdict in the reproduction's `README.md` under a
 3. Follow Steps 3-7 above.
 4. Open a PR to this repo with the reproduction.
 5. Once merged, bump the submodule pin in the parent
-   `devitocodes/reviews` repo to point at the new commit.
+   `devitocodespro/devito-fd-survey` repo to point at the new commit.
 
 ## Anti-patterns (NEVER)
 

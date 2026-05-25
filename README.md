@@ -2,8 +2,8 @@
 
 Standalone reproductions of computational geophysics papers in
 [Devito](https://www.devitoproject.org). Companion repository to
-[`devitocodes/reviews`](https://github.com/devitocodes/reviews) (the
-TTI finite-difference methods review).
+[`devitocodespro/devito-fd-survey`](https://github.com/devitocodespro/devito-fd-survey)
+(the TTI finite-difference methods survey).
 
 Each subdirectory reproduces one paper from scratch with:
 
