@@ -1,0 +1,20 @@
+# Python / uv per-folder isolation
+**/.venv/
+**/__pycache__/
+**/*.pyc
+
+# Local CLAUDE.md (recursive, per ~/CLAUDE.md rule). The top-level
+# CLAUDE.md is the EXCEPTION — it documents the reproduction
+# methodology and IS tracked.
+**/CLAUDE.md
+!CLAUDE.md
+
+# macOS
+.DS_Store
+
+# Quarto build outputs
+**/_files/
+**/_freeze/
+**/_book/
+**/*.quarto_ipynb
+.quarto/
