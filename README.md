@@ -34,7 +34,7 @@ graduation review).
 ## Quick start (per reproduction)
 
 ```bash
-git clone https://github.com/devitocodes/reviews-reproduced
+git clone https://github.com/devitocodespro/reviews-reproduced
 cd reviews-reproduced/doi_<DOI>/
 uv sync
 uv run python run_reproduction.py
