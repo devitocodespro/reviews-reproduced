@@ -1,0 +1,45 @@
+[project]
+name = "reproduction-di-bartolo-2015"
+version = "0.1.0"
+description = "Devito reproduction of Di Bartolo, Dors & Mansur (2015) — Theory of equivalent staggered-grid schemes for anisotropic media"
+authors = [{ name = "Gerard Gorman", email = "gerard@devitocodes.com" }]
+requires-python = ">=3.10"
+
+# Pinned to Devito mainline at the same SHA as the Virieux/Levander/
+# Igel folders for cross-validation against those reproductions.
+# uv.lock pins the exact SHA at sync time.
+#
+# This reproduction's canonical claims (all byte-checkable against
+# the paper):
+#   1. Table 2 VTI rock properties (12 rocks, c11/c33/ρ/ε/δ +
+#      derived γ, c55, c13, c15, c35) loaded byte-exact.
+#   2. Eq 45/46 ESG-SSG-RSG stencil equivalence relations validated
+#      via symbolic check at small grid.
+#   3. Numerical-dispersion behavior matches the paper for VTI rocks
+#      (NSG, SSG, ESG, RSG variants) under the paper's stability /
+#      numerical parameters in Table 1 (Δt=250μs, h=5m, f0=60Hz,
+#      Nx=Nz=601).
+#
+# Di Bartolo et al. 2015 is the canonical literature anchor for
+# Method 1 SSG's TTI-elastic graduation (post Round 1 DISAGREE
+# discovery that Virieux/Levander cover ONLY isotropic P-SV). The
+# equivalent-SG theory derived in this paper formalises the
+# Igel 1995 cross-derivative averaging methodology used by the
+# parent repo's run_ssg(cross_deriv='averaged') production path.
+
+dependencies = [
+    "devito>=4.8.0",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "matplotlib>=3.8",
+    "sympy>=1.13",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+packages = []
