@@ -1,0 +1,16 @@
+[project]
+name = "irakarama-luo-etgen-shen-obrien-2026"
+version = "0.1.0"
+description = "Reproduction of Irakarama et al. (IMAGE 2025) — Accelerating anisotropic elastic subsurface imaging with dual-pair finite differences (DOI 10.1190/image2025-4313380.1)"
+requires-python = ">=3.11"
+dependencies = [
+    "devito",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "sympy>=1.13",
+    "matplotlib>=3.8",
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
