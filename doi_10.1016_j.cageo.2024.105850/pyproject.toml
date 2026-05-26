@@ -1,0 +1,24 @@
+[project]
+name = "zhang-schmitt-2025-rsg-reproduction"
+version = "0.1.0"
+description = "Reproduction of Zhang & Schmitt 2025 (Computers & Geosciences 196:105850) RSG Devito solver"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# These are intentionally loose: the reproduction tests anchor on
+# tabulated quantitative claims (paper_tables.py), which are pure
+# Python/numpy and don't require a specific Devito commit. The
+# upstream/src/ code does require Devito to actually exercise the
+# operator — pin to the Devito 4.8.4+ family that supports RSFD
+# (PR #2326, March 2024).
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "sympy>=1.13",
+    "matplotlib>=3.8",
+    "pytest>=8.0",
+    "devito>=4.8.4",
+]
+
+[tool.uv]
+package = false
