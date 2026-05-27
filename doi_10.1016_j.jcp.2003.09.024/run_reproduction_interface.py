@@ -28,15 +28,65 @@ Non-LP04-equivalent component:
     The current code applies U* to U_tilde once per timestep,
     which is a CLOSE BUT NOT EQUIVALENT simplification.
 
-Empirical impact on integrated L^∞ / L^1 (Nx ∈ {60, 100, 150}):
-  L^1 order = 1.65 (PASS ≥ 1.5; LP04 Table 2 target ~2.0)
-  L^∞ order = 0.90 (FAIL ≥ 1.5; LP04 Table 2 target ~2.0)
+Empirical impact on integrated L^∞ / L^1 — extended sweep over
+Nx ∈ {60, 100, 150, 200, 300}:
+  L^1 order = 1.50 (PASS ≥ 1.5; LP04 Table 2 target ~2.0)
+  L^∞ order = 0.93 (FAIL ≥ 1.5; LP04 Table 2 target ~2.0)
 
-The L^∞ residual concentrates at distance 1-3 cells from Γ even
-with x-edge exclusion, indicating the integration-glue defect is
-local to the irregular cells (not from boundary leakage). The
-projector itself is paper-faithful — the gap is purely in
-`esim_apply.lp04_step`.
+DIAGNOSTIC FINDING (2026-05-27 extended sweep): L^∞ peak
+MIGRATES AWAY from Γ as Nx increases:
+  Nx=60  → peak at distance 1 cell from Γ
+  Nx=100 → 1 cell
+  Nx=150 → 3 cells
+  Nx=200 → 4 cells
+  Nx=300 → 8 cells
+
+This is NOT consistent with a localised interface-glue defect
+(which would keep the peak fixed at distance 1). The migration
+pattern suggests the bulk LW step itself is producing larger-
+than-O(dx²) error AWAY from Γ — possibly because the per-side
+LW pass with homog material processes the WHOLE array including
+the OPPOSITE-side region (with discontinuous U_tilde values
+between actual same-side U^n and U*-substituted irregular cells),
+and the LW operator propagates that discontinuity into the bulk
+at order < 2.
+
+Fix path (revised post-extended-sweep, 2026-05-27):
+  Instead of running LW on the whole array with homog material
+  + scatter U* at irregular cells, build a PER-CELL local LW
+  stencil application: at each target cell M, gather its own
+  side's neighbours (U^n) + cross-Γ neighbours (U*), apply LW
+  with M's own material to this localised mixed array.
+
+This is the strict LP04 Eq 43-44 interpretation. The current
+"per-side homog LW pass + combine" is a simplification that
+ASSUMES the LW operator's behaviour on the OPPOSITE-side region
+is irrelevant (since the COMBINE step discards it). But the LW
+step is locally non-trivial: at fluid-target reads, neighbours
+at distance 2 ALSO get processed by the LW step with fluid
+material, generating bulk values that bleed into the COMBINE
+output at fluid cells via the LW operator's spatial coupling.
+
+DIAGNOSTIC (LW-alone heterogeneous baseline, 2026-05-27):
+Running LW with spatially-varying material (no ESIM
+substitution at all) yields L^∞ slope = 1.01, L^1 slope = 1.92
+on the same sweep. So baseline LW on heterogeneous material is
+itself only order-1 at L^∞ — the discrete material discontinuity
+is a known LW limitation that LP04 §3 is DESIGNED to fix. Our
+LP04 ESIM DOES improve absolute L^∞ magnitude vs LW-alone (at
+Nx=100: 2.8e5 vs 7.1e5; at Nx=200: 1.5e5 vs 4.2e5) but does NOT
+fully restore order 2 at these resolutions.
+
+The remaining gap likely requires:
+  (a) Strict per-cell SAME-side / OTHER-side leg mixing per
+      Eq 43-44 (the current per-side LW + scatter is an
+      approximation)
+  (b) Finer grids (Nx ≥ 400) where the asymptotic regime sets in
+  (c) Possibly higher k (jump-condition order 3 instead of 2)
+
+Effort: ~2-3 days (per Codex+Gemini post-port dual-reviewer
+estimate, with the extended-sweep + LW-alone diagnostics adding
+~1 day for the diagnostic groundwork).
 
 Honest provenance per ~/CLAUDE.md Rules 1-13: `novel-combination`,
 NOT `published`. The path to `published`:
@@ -225,6 +275,7 @@ def main() -> int:
     # Use shorter T_end to leave more interior.
     T_end_periods = 0.05    # short propagation so y-edge effects don't penetrate
     border_cells = 18       # exclude ~T_end·c_p / dx cells from each y-edge
+    nx_sweep = [60, 100, 150, 200, 300]   # extended to surface asymptotic regime
     print(f"Medium: fluid (ρ={medium['rho_f']}, c={medium['c_f']}) "
           f"above; solid (ρ={medium['rho_s']}, c_p={medium['c_p']}, "
           f"c_s={medium['c_s']}) below")
@@ -232,7 +283,7 @@ def main() -> int:
     print(f"T_end = {T_end_periods:.2f} period; border_cells = {border_cells}")
     print()
 
-    Nx_list = [60, 100, 150]
+    Nx_list = nx_sweep
     results: list[dict] = []
     comp_names = ['v_x', 'v_y', 'σ_xx', 'σ_xy', 'σ_yy']
     for Nx in Nx_list:

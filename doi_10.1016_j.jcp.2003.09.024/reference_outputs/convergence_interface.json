@@ -23,8 +23,8 @@
       "n_irregular_cells": 120,
       "L_inf": 500138.31112430256,
       "L_1": 14391.367197078342,
-      "setup_s": 0.3074371814727783,
-      "step_s": 0.024667024612426758,
+      "setup_s": 0.3116343021392822,
+      "step_s": 0.025755882263183594,
       "border_cells": 18,
       "L_inf_at_component": 4,
       "L_inf_at_ij": [
@@ -42,8 +42,8 @@
       "n_irregular_cells": 200,
       "L_inf": 281980.43839809747,
       "L_1": 5590.628286593777,
-      "setup_s": 0.48381996154785156,
-      "step_s": 0.07483100891113281,
+      "setup_s": 0.4895148277282715,
+      "step_s": 0.07531118392944336,
       "border_cells": 18,
       "L_inf_at_component": 4,
       "L_inf_at_ij": [
@@ -61,8 +61,8 @@
       "n_irregular_cells": 300,
       "L_inf": 220997.07775890178,
       "L_1": 3211.6582238514893,
-      "setup_s": 0.7380542755126953,
-      "step_s": 0.1704082489013672,
+      "setup_s": 0.7347829341888428,
+      "step_s": 0.17001104354858398,
       "border_cells": 18,
       "L_inf_at_component": 4,
       "L_inf_at_ij": [
@@ -70,9 +70,47 @@
         72
       ],
       "L_inf_dist_to_interface_cells": 3
+    },
+    {
+      "Nx": 200,
+      "dx": 0.0005,
+      "dt": 3.4482758620689664e-08,
+      "n_steps": 29,
+      "T_end": 1.0000000000000002e-06,
+      "n_irregular_cells": 400,
+      "L_inf": 154339.18071069516,
+      "L_1": 2058.368206611476,
+      "setup_s": 0.9760761260986328,
+      "step_s": 0.31090211868286133,
+      "border_cells": 18,
+      "L_inf_at_component": 4,
+      "L_inf_at_ij": [
+        140,
+        96
+      ],
+      "L_inf_dist_to_interface_cells": 4
+    },
+    {
+      "Nx": 300,
+      "dx": 0.0003333333333333334,
+      "dt": 2.3255813953488376e-08,
+      "n_steps": 43,
+      "T_end": 1.0000000000000002e-06,
+      "n_irregular_cells": 600,
+      "L_inf": 108724.69507229421,
+      "L_1": 1275.999744941418,
+      "setup_s": 1.487239122390747,
+      "step_s": 0.8196282386779785,
+      "border_cells": 18,
+      "L_inf_at_component": 4,
+      "L_inf_at_ij": [
+        90,
+        142
+      ],
+      "L_inf_dist_to_interface_cells": 8
     }
   ],
-  "order_L_inf": 0.9011549393002711,
-  "order_L_1": 1.6459727540110147,
+  "order_L_inf": 0.9343906211888933,
+  "order_L_1": 1.5026626552373983,
   "paper_reference": "Lombard & Piraux 2004 JCP 195 Table 2"
 }

@@ -173,19 +173,36 @@ LP04's extensional-positive p = -p_physical convention
 matching `paper_tables.C1_zero` + `esim_apply.py:159-180`.
 
 🟡 INTEGRATED CONVERGENCE — PARTIAL — the
-`run_reproduction_interface.py` plane-interface sweep gives:
+`run_reproduction_interface.py` plane-interface sweep over
+Nx ∈ {60, 100, 150, 200, 300} gives:
 
 | Norm | Pre-port order | Post-port order | Target |
 |---|---|---|---|
-| L^∞ | 0.73 (FAIL ≥1.5) | 0.90 (FAIL ≥1.5) | ≥1.8 |
-| L^1 | 1.52 (PASS ≥1.5) | **1.65** (PASS) | ≥1.8 |
+| L^∞ | 0.73 (FAIL ≥1.5) | 0.93 (FAIL ≥1.5) | ≥1.8 |
+| L^1 | 1.52 (PASS ≥1.5) | **1.50** (PASS) | ≥1.8 |
 
-The L^∞ residual concentrates at distance 1-3 cells from Γ
-(the irregular cells) even with x-edge exclusion, indicating
-a residual defect in the **LW × U_tilde integration glue**
-that is SEPARATE from the per-cell projector residual. The
-projector itself is now paper-faithful at slope ≥ 1.96 per
-the post-port Phase A.1 results above.
+**Diagnostic finding (2026-05-27 extended sweep + LW-alone baseline):**
+
+| Approach | L^∞ slope | L^∞ at Nx=200 |
+|---|---|---|
+| LW-alone, heterogeneous material (no ESIM) | 1.01 | 4.2e5 |
+| LP04 (recursive C/L + per-side LW + scatter)  | 0.93 | 1.5e5 |
+
+LP04 ESIM substantially improves the ABSOLUTE L^∞ magnitude
+(~2-3× smaller error at each grid) but does NOT fully restore
+order 2 at these resolutions. Both approaches are limited by
+the discrete material discontinuity — a known LW pre-asymptotic
+regime that LP04 §3 is designed to fix in principle. At Nx=300
+the L^∞ peak sits 8 cells from Γ (NOT at irregular cells),
+indicating bulk error propagation from the discontinuity rather
+than a localised projector defect.
+
+The remaining gap to LP04 §4.2 Table 2's claimed L^∞ order ~2.0
+likely requires (a) strict per-cell same-side/other-side leg
+mixing per LP04 Eq 43-44 (the current per-side LW + scatter is
+an approximation), AND/OR (b) finer grids (Nx ≥ 400) where the
+asymptotic regime sets in, AND/OR (c) higher Taylor order k.
+Estimated 2-3 days additional engineering.
 
 🟡 LP04 §4.2 OBLIQUE GEOMETRY DEFERRED — the user-authorised
 horizontal + oblique scope is partially met: horizontal is
