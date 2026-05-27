@@ -154,26 +154,32 @@ def compute_U_tilde(U_5comp: np.ndarray,
         for (i_b, j_b) in cell.B1_ij:
             v_x = U_5comp[0, i_b, j_b]
             v_y = U_5comp[1, i_b, j_b]
-            # p = -σ_xx (using σ_xx, equivalent to -σ_yy in fluid)
-            p = -U_5comp[2, i_b, j_b]
-            U_B_parts.append(np.array([v_x, v_y, p]))
+            # LP04 sign convention (2026-05-27): paper_tables.C1_zero
+            # uses extensional-positive "p"; in physical compressive
+            # convention p_LP04 = σ_xx_phys (fluid) = -p_physical.
+            # So pass σ_xx (= U_5comp[2]) directly, no sign flip.
+            p_LP04 = U_5comp[2, i_b, j_b]
+            U_B_parts.append(np.array([v_x, v_y, p_LP04]))
         for (i_b, j_b) in cell.B2_ij:
             U_B_parts.append(U_5comp[:, i_b, j_b].copy())
         U_B_vec = np.concatenate(U_B_parts)
         U_star = cell.N @ U_B_vec
-        # For solid-side target, U_star has 5 components → direct.
-        # For fluid-side target, U_star has 3 components (v_x, v_y, p)
-        # — embed into the 5-component degenerate-solid layout:
-        # σ_xx = σ_yy = -p, σ_xy = 0.
+        # Per LP04 Eq 41-42 (swap-fix 2026-05-27):
+        # SOLID target → U_star is 3-comp FLUID extension at solid pos
+        #   in LP04 convention; embed into 5-comp degenerate-solid layout
+        #   via σ_xx = σ_yy = p_LP04 = -p_physical (compressive σ).
+        # FLUID target → U_star is 5-comp SOLID extension at fluid pos
+        #   in physical convention; use directly.
         if cell.target_side == 'solid':
-            U_tilde[:, i, j] = U_star
-        else:
-            v_x, v_y, p = float(U_star[0]), float(U_star[1]), float(U_star[2])
+            v_x, v_y, p_LP04 = (float(U_star[0]), float(U_star[1]),
+                                  float(U_star[2]))
             U_tilde[0, i, j] = v_x
             U_tilde[1, i, j] = v_y
-            U_tilde[2, i, j] = -p
+            U_tilde[2, i, j] = p_LP04
             U_tilde[3, i, j] = 0.0
-            U_tilde[4, i, j] = -p
+            U_tilde[4, i, j] = p_LP04
+        else:
+            U_tilde[:, i, j] = U_star
     return U_tilde
 
 
@@ -212,24 +218,25 @@ def lp04_step(U_5comp: np.ndarray,
         for (i_b, j_b) in cell.B1_ij:
             v_x = U_5comp[0, i_b, j_b]
             v_y = U_5comp[1, i_b, j_b]
-            p = -U_5comp[2, i_b, j_b]
-            U_B_parts.append(np.array([v_x, v_y, p]))
+            # LP04 sign convention (2026-05-27): pass σ_xx (= U_5comp[2])
+            # directly as LP04 "p" (extensional-positive = -p_physical).
+            p_LP04 = U_5comp[2, i_b, j_b]
+            U_B_parts.append(np.array([v_x, v_y, p_LP04]))
         for (i_b, j_b) in cell.B2_ij:
             U_B_parts.append(U_5comp[:, i_b, j_b].copy())
         U_B_vec = np.concatenate(U_B_parts)
         U_star = cell.N @ U_B_vec
-        # Per LP04 Eq 41-42 (corrected sign convention 2026-05-27):
-        # SOLID target → U* is FLUID extension at solid position
-        #   → shape (3,) in (v_x, v_y, p) layout
-        #   → embed into 5-component degenerate-solid layout via
-        #     σ_xx = σ_yy = -p, σ_xy = 0
-        # FLUID target → U* is SOLID extension at fluid position
-        #   → shape (5,) in (v_x, v_y, σ_xx, σ_xy, σ_yy) layout
-        #   → use directly (the 5-component layout matches the bulk)
+        # Per LP04 Eq 41-42 (swap-fix + sign-fix 2026-05-27):
+        # SOLID target → U_star is 3-comp FLUID extension in LP04
+        #   convention; embed via σ_xx = σ_yy = p_LP04 (no negation;
+        #   p_LP04 = -p_physical = σ_xx_physical in compressive
+        #   convention).
+        # FLUID target → U_star is 5-comp SOLID extension in physical
+        #   convention; use directly.
         if cell.target_side == 'solid':
-            v_x, v_y, p = (float(U_star[0]), float(U_star[1]),
-                            float(U_star[2]))
-            U_5 = np.array([v_x, v_y, -p, 0.0, -p])
+            v_x, v_y, p_LP04 = (float(U_star[0]), float(U_star[1]),
+                                  float(U_star[2]))
+            U_5 = np.array([v_x, v_y, p_LP04, 0.0, p_LP04])
         else:
             U_5 = U_star
         U_star_per_cell[(i, j)] = (cell.target_side, U_5)

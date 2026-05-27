@@ -206,8 +206,8 @@ def main() -> int:
     # border_cells = 0.4 · Ny rows from each side. At Nx=60, that's
     # 24 cells = 40% — leaves only 12-cell middle band. Tight.
     # Use shorter T_end to leave more interior.
-    T_end_periods = 0.15
-    border_cells = 6
+    T_end_periods = 0.05    # short propagation so y-edge effects don't penetrate
+    border_cells = 18       # exclude ~T_end·c_p / dx cells from each y-edge
     print(f"Medium: fluid (ρ={medium['rho_f']}, c={medium['c_f']}) "
           f"above; solid (ρ={medium['rho_s']}, c_p={medium['c_p']}, "
           f"c_s={medium['c_s']}) below")
