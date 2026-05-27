@@ -1,5 +1,45 @@
 """LP04 plane-interface convergence sweep — full LW + ESIM pipeline.
 
+SURROGATE STATUS — dual-reviewer DISAGREE 2026-05-27.
+See transcription_review/lp04_close_out_codex.txt for Codex's
+review of the close-out attempt.
+
+Current state: paper-faithful at the COMPONENT level but NOT at
+the integrated Table-2 level. Integrated L^1 order = 1.52 ≥ 1.5,
+but L^∞ order = 0.73 — fails the LP04 Table 2 trend toward 2.0.
+
+Codex DISAGREE diagnosis (load-bearing finding): the order-k
+jump-condition matrices C_i^k / L_i^k are currently built as
+block-diagonal copies of the order-0 matrices C_i^0 / L_i^0
+(esim_projector.py:block_diag_C_k). LP04 §3.1 instead derives
+C_i^k / L_i^k by DIFFERENTIATING C_i^0 in time + along the
+interface and replacing time derivatives with the PDE — even
+for a straight interface, the differentiated higher-order
+conditions are NOT equivalent to imposing C_i^0 independently
+on every Taylor monomial. The result: our projector achieves
+slope ~1.81 instead of LP04's claimed O(dx³), and the
+integrated L^∞ falls short by ~1 order.
+
+Fix path (Codex's ranked recommendation):
+  1. Implement real LP04 Eq 13-19 recursive C_i^k/L_i^k for
+     k=2 (horizontal first: 6-10 h; oblique: 1-2 days)
+  2. One-step local truncation diagnostic (2-4 h)
+  3. Re-run projector slope expecting O(dx³) (1 h iteration)
+  4. Run exact LP04 §4.2 80°-inclined, 21°-incident, Nx ∈
+     {100, 200, 400, ...} geometry (6-12 h)
+
+Honest provenance per ~/CLAUDE.md Rules 1-13: this reproduction
+is `surrogate` with documented gaps — NOT `published`. The
+static components (paper-tables, LW bulk, R/T at Γ, sign-fixed
+projector diagnostics) are paper-faithful; the integrated
+reproduction is partial pending the recursive C/L fix.
+
+Reference for next-session implementer: the parent repository's
+`scripts/tier3_esim_recursion.py` already implements the LP04
+Eq 17-18 flux-Jacobian recursion (`flux_jacobians_isotropic`,
+`recurse_to_order`). That code is paper-faithful and could be
+ported to the reproduction folder as a standalone module.
+
 PARTIAL-COMPLETION STATUS — 2026-05-27 (post BC + label-swap fixes):
 
 All static components are byte-correct in isolation:
