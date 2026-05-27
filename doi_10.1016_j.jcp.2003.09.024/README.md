@@ -142,16 +142,84 @@ doi_10.1016_j.jcp.2003.09.024/
 🟢 PAPER-TABLES TRANSCRIPTION COMPLETE — all load-bearing
 equations (10-11, 20-24, 26-31, 32-37, 38-42, 43-44) and
 Appendix A.1-A.2 (G_i^k pseudocode) byte-transcribed under
-user-confirmed side-by-side review. 21/21 pytest tests pass
-including dimension assertions at k=0,1,2,3 and α₁/α₂
-identity checks.
+user-confirmed side-by-side review.
 
-🟡 RUN-REPRODUCTION + REFERENCE-OUTPUTS PENDING — the
-`run_reproduction.py` driver (assemble Π·G·K·M̄⁻¹ projector
-for the §4.1 plane fluid-solid interface, verify against the
-paper's published L²-error rates) is the next step. Tracked
-in the parent plan as Phase 3 (Tier 3 ESIM design via
-dual-reviewer) → Phase 4 (Tier 3 implementation).
+🟢 LP04 §3.1 RECURSIVE C_i^k / L_i^k PORT (2026-05-27) — the
+recursive jump-condition matrices via Eq 13-18 are now
+implemented in `esim_recursion.py`. This replaces the prior
+block-diagonal `C_i^k`/`L_i^k` construction (which was a
+non-equivalent simplification flagged by the prior Codex
+DISAGREE; see `transcription_review/lp04_close_out_codex.txt`
++ `lp04_R_plan_review.txt`).
+
+Empirical impact on projector-vs-analytical convergence
+(`tests/test_projector_vs_analytical.py`):
+
+| Target side | Pre-port slope (block-diagonal) | Post-port slope (recursive) |
+|---|---|---|
+| solid     | 1.81                            | **2.71** |
+| fluid     | 1.81                            | **1.96** |
+
+49 / 49 pytest tests pass post-port (including 4 projector-vs-
+analytical correspondence + 6 R/T BC continuity + 5 Lax-Wendroff
+bulk convergence + 14 paper-table byte-match + 8 projector
+structural + 5 R/T oblique + 5 LW homog + 2 misc).
+
+The LP04-R port also closed Codex's plan-review F1 finding
+(monomial-order mismatch) by using the reproduction's
+paper/x-first `minimal_multi_indices` ordering, and F2 (sign
+convention) via `flux_jacobians_fluid` documented to use
+LP04's extensional-positive p = -p_physical convention
+matching `paper_tables.C1_zero` + `esim_apply.py:159-180`.
+
+🟡 INTEGRATED CONVERGENCE — PARTIAL — the
+`run_reproduction_interface.py` plane-interface sweep gives:
+
+| Norm | Pre-port order | Post-port order | Target |
+|---|---|---|---|
+| L^∞ | 0.73 (FAIL ≥1.5) | 0.90 (FAIL ≥1.5) | ≥1.8 |
+| L^1 | 1.52 (PASS ≥1.5) | **1.65** (PASS) | ≥1.8 |
+
+The L^∞ residual concentrates at distance 1-3 cells from Γ
+(the irregular cells) even with x-edge exclusion, indicating
+a residual defect in the **LW × U_tilde integration glue**
+that is SEPARATE from the per-cell projector residual. The
+projector itself is now paper-faithful at slope ≥ 1.96 per
+the post-port Phase A.1 results above.
+
+🟡 LP04 §4.2 OBLIQUE GEOMETRY DEFERRED — the user-authorised
+horizontal + oblique scope is partially met: horizontal is
+in place, oblique (80°-inclined Γ + 21° incidence) requires
+extending `find_irregular_cells_horizontal` →
+`find_irregular_cells_oblique` + extending
+`PlaneWaveAcousticElastic` for oblique R/T. Estimated 1-2
+days; deferred until the LW × U_tilde integration glue lands
+a fix that brings L^∞ order ≥ 1.5 on horizontal.
+
+## Provenance classification
+
+**`novel-combination`** (post-2026-05-27 port). The components:
+
+- **LP04 §3.1 recursive C_i^k / L_i^k construction** —
+  paper-faithful per Eq 13-18, verified by the
+  projector-vs-analytical convergence slope 1.96-2.71.
+- **LP04 §3 jump conditions + compatibility matrices**
+  (paper_tables.py Eq 10-11, 20-24, 26-31, A.1, A.2) — paper-
+  faithful per side-by-side user-confirmed transcription.
+- **Lax-Wendroff bulk** — Strang-Toro-Dumbser LW; LP04
+  itself uses LW so this matches the paper's bulk choice.
+- **LW × U_tilde integration glue** — currently per-side
+  homogeneous LW pass with U* scattered at irregular cells
+  (LP04 Eq 43-44 simplified). The full LP04 Eq 43-44 calls
+  for the U^n at SAME-side stencil legs + U* at OTHER-side
+  legs — this distinction may be the missing piece for
+  L^∞ order ≥ 1.8. Investigation pending.
+
+The classification is `novel-combination` not `published`
+because the L^∞ integrated convergence is below 1.5; the
+projector itself is paper-faithful but the integration glue
+needs refinement before claiming full LP04 §4.2 Table 2
+reproduction.
 
 Tier 3 implementation in Method 2 RSG will consume this
 transcription via `paper_tables.build_G_fluid(k)`,

@@ -73,6 +73,9 @@ def build_projectors_for_cells(cells: list[IrregularCellData],
                                   y_interface: float,
                                   c_p_solid: float, c_s_solid: float,
                                   q_factor: float = 3.5,
+                                  rho_fluid: float = 1.0,
+                                  c_fluid: float = 1.5,
+                                  rho_solid: float = 2.6,
                                   ) -> None:
     """Populate each cell's `N` matrix + disk-B index lists in-place.
 
@@ -128,6 +131,8 @@ def build_projectors_for_cells(cells: list[IrregularCellData],
             tangent=tangent,
             B1_coords=B1_phys, B2_coords=B2_phys,
             k=2, c_p_solid=c_p_solid, c_s_solid=c_s_solid,
+            rho_fluid=rho_fluid, c_fluid=c_fluid,
+            rho_solid=rho_solid,
         )
         cell.N = N
         cell.cond_M = info.cond_M

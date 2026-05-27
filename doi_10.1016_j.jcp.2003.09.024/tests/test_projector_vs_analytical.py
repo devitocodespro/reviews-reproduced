@@ -207,16 +207,21 @@ def test_projector_taylor_convergence(target_side):
     """LP04 §3.5 + Eq 41 paper-claim: projector residual scales as
     O(dx^{k+1}) = O(dx³) for k=2.
 
-    Sweep over Nx ∈ {40, 80, 160} (factor-of-2 refinement) and fit
-    log-log slope. Empirically observed slope ≈ 1.8 for both target
-    sides post-sign-fix (2026-05-27) — between O(dx²) and O(dx³) for
-    the dominant pressure/σ_yy component. Acceptance threshold 1.5
-    is the meaningful gate: confirms the projector REFINES with dx
-    (rules out the pre-sign-fix divergent slope of -0.06).
+    History
+    -------
+    Pre-sign-fix (broken `p_LP04 = +p_phys`): slope = −0.06 (DIVERGED).
+    Post-sign-fix + block-diagonal C/L (LP04 §3.6 surrogate, pre-port):
+        slope = 1.81 for both sides.
+    Post-recursive-C/L port (LP04 §3.1 paper-faithful, 2026-05-27):
+        slope = 2.71 (solid target) / 1.96 (fluid target).
 
-    The full LP04 O(dx³) claim may require disk-B geometry with more
-    angular distinct y-values; with our minimal q=3.5·dx disk the
-    leading remainder term is k=2 (linear in solid-σ-derivative).
+    The asymmetry between sides reflects the disk-B sampling pattern:
+    SOLID target reads B_2 (5-component, fewer cells) via the swap
+    formula; FLUID target reads B_1 (3-component) more directly.
+
+    Sweep over Nx ∈ {40, 80, 160} (factor-of-2 refinement) and fit
+    log-log slope. Acceptance: slope ≥ 1.5 (the paper-claimed O(dx³)
+    target is 3.0; both sides exceed the floor by margin).
     """
     Nx_list = [40, 80, 160]
     residuals = []

@@ -33,6 +33,11 @@ from numpy.linalg import svd
 from scipy.linalg import pinv as scipy_pinv
 
 import paper_tables as pt
+from esim_recursion import (
+    build_jump_matrix_k_minimal,
+    flux_jacobians_fluid,
+    flux_jacobians_isotropic,
+)
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────
@@ -208,6 +213,9 @@ def build_projector(
     k: int,
     c_p_solid: float,
     c_s_solid: float,
+    rho_fluid: float = 1.0,
+    c_fluid: float = 1.5,
+    rho_solid: float = 2.6,
     ) -> tuple[np.ndarray, ProjectorInfo]:
     """Build the modified-value projector N row matrix per LP04 Eq 42.
 
@@ -252,10 +260,25 @@ def build_projector(
     C0_f, L0_f = _C0_L0_for_side('fluid', tangent)
     C0_s, L0_s = _C0_L0_for_side('solid', tangent)
 
-    C_f_k = block_diag_C_k(C0_f, k)
-    C_s_k = block_diag_C_k(C0_s, k)
-    L_f_k = block_diag_L_k(L0_f, k)
-    L_s_k = block_diag_L_k(L0_s, k)
+    # LP04 §3.1 Eq 13-18: build C_i^k and L_i^k via the recursive
+    # construction (differentiate order-0 in time + along Γ; substitute
+    # the PDE for time derivatives). The block-diagonal copy of
+    # C_i^0 / L_i^0 that this code formerly used is NOT equivalent to
+    # the LP04 recipe even for a piecewise-flat Γ — the PDE-substitution
+    # rows -M_{k-1}·A and -M_{k-1}·B are non-zero and load-bearing for
+    # the O(dx^{k+1}) truncation claim. Codex DISAGREE 2026-05-27 (see
+    # transcription_review/lp04_close_out_codex.txt and lp04_R_plan_review.txt).
+    x_pr, y_pr = float(tangent[0]), float(tangent[1])
+    A_f, B_f = flux_jacobians_fluid(rho_fluid, c_fluid)
+    A_s, B_s = flux_jacobians_isotropic(rho_solid, c_p_solid, c_s_solid)
+    C_f_k = build_jump_matrix_k_minimal(C0_f, A_f, B_f, x_pr, y_pr,
+                                          k, n_state_fluid)
+    C_s_k = build_jump_matrix_k_minimal(C0_s, A_s, B_s, x_pr, y_pr,
+                                          k, n_state_solid)
+    L_f_k = build_jump_matrix_k_minimal(L0_f, A_f, B_f, x_pr, y_pr,
+                                          k, n_state_fluid)
+    L_s_k = build_jump_matrix_k_minimal(L0_s, A_s, B_s, x_pr, y_pr,
+                                          k, n_state_solid)
 
     G_f_k = _build_G_for_side('fluid', k, alpha_1, alpha_2)
     G_s_k = _build_G_for_side('solid', k, alpha_1, alpha_2)

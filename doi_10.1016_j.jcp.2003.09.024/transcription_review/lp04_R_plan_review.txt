@@ -1,0 +1,200 @@
+                                                                 1
+                                                                    
+                                                                    
+                       0        0                 0         0       
+                      
+                                                                ρ   
+                                                                     
+                                                                    
+                                                                    
+                                                                    
+                                                                    
+               Bi = −       
+                       0 ρ c2 − 2 c2
+                                      
+                                                   0         0   0
+                                                                     .
+                                                                                 (7)
+                              p    s                                
+                                                                    
+                                                                    
+                                                                    
+                                                                    
+                                                                    
+                       ρ c2     0                 0         0   0   
+                          s                                         
+                                                                    
+                                                                    
+                                                                    
+                                                                    
+                                                                    
+                            0       ρ c2p          0         0   0
+
+
+2.2 The interface conditions
+
+
+Consider a point P of Γ (figure 2). On both sides of P , the limit values of
+the solution U (x, y, t) and of its spatial derivatives up to the k-th order are
+denoted by
+
+                                                     ∂α                 ∂k
+                                                                            !
+                               ∂     ∂
+      U ki =      lim       U,    U,    U , ...,              U , ...,      U ,   (8)
+               M →P,M ∈Ωi      ∂x    ∂y          ∂ xα−β ∂ y β          ∂ yk
+
+with α = 0, ..., k and β = 0, ..., α. The vector U ki has 3 (k + 1)(k + 2)/2
+components if Ωi is fluid, and 5 (k + 1)(k + 2)/2 components if Ωi is solid.
+
+To well-define the wave propagation problem, one must give the jump condi-
+tions and the boundary conditions satisfied by the solution U along Γ. The
+classical interface conditions are written abstractly
+
+                                   C 01 U 01 = C 02 U 02 ,
+
+
+                                   L01 U 01 = 0,                                  (9)
+
+
+                                   L02 U 02 = 0.
+
+The first expression in (9) is a jump condition, the other are boundary con-
+ditions. The matrices C 0i and L0i (i = 1, 2) depend on the parameter τ , but
+they are independant of t. More sophisticated interface conditions could also
+be investigated, but they are beyond the scope of the present paper; see e.g.
+
+
+                                             7
+
+ succeeded in 396ms:
+exec
+/bin/zsh -lc "pdftotext -layout -f 9 -l 9 /tmp/lombard_piraux_2004.pdf - | sed -n '1,180p'" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+unix_listener_tmp: bind "/Users/ggorman/.ssh/agent/s.SNVRkTRDyL.agent.TJhtvoSb0A": Operation not permitted
+main: Couldn't prepare agent socket
+[19] for conditions describing imperfect contacts between solids. Unlike other
+authors who work in a local system of coordinates (see e.g. [28]), we work
+directly in the (x, y) coordinates.
+
+
+As an example, consider the fluid-solid case, where Ω1 is the fluid and Ω2 is
+the solid. Since the fluid is perfect, the normal velocity and the normal stresses
+are continuous, hence
+
+
+                                    [v.n] = 0,                       −p n = σ n,                                            (10)
+
+
+where [ ] denotes the jump across Γ, from Ω1 to Ω2 . From (1) and (10), we
+recover (9) by setting
+
+                                                                                
+                                0               0
+                     −y                    x                        0           
+                                                                                
+            C 01 =                                                              ,
+                                                                                
+                                                                                
+                                                           0                0
+                                                                                 
+                            0           0           x2+y2
+
+                                                                                                      
+                                0           0
+                     −y                x                   0                    0            0        
+                                                                                                      
+            C 02 = 
+                                                                                                      ,
+                                                                                                       
+                                                                                                                            (11)
+                                                                                                      
+                                                               02                   0   0        02
+                                                                                                       
+                            0           0                   y                −2 x y          x
+
+                                                                   
+            L01 =       0           0               0                    ,
+
+                                                                                                                   
+            L02 =       0           0               xy
+                                                        0       0                 02
+                                                                                 y −x
+                                                                                             02
+                                                                                                       −x y
+                                                                                                            0   0
+                                                                                                                        .
+
+
+
+From the equation (10), we can seek to express the solution on the fluid
+side (2) in terms of the solution on the solid side (4), or inversely. In both
+cases, there are not enough equations, as shown now. In the first case, three
+unknowns must be determined; to do so, we deduce from (10) one equation for
+p and only one equation for v1 and v2 . In the second case, five unknowns must
+be determined; to do so, we have only one equation for v1 and v2 , and two
+equations (one boundary condition and one jump condition) for σ11 , σ12 , and
+σ22 . This simple remark about the underdetermination of interface conditions
+leads to a rather complicated procedure explained in section 3.3.
+
+
+                                                                    8
+
+exec
+/bin/zsh -lc 'pdftoppm -f 9 -l 9 -png -r 220 /tmp/lombard_piraux_2004.pdf /private/tmp/lp04_page9' in /Users/ggorman/projects/reviews
+ succeeded in 398ms:
+codex
+The plan is close, but not ready as written. Two items are load-bearing: the collapsed minimal basis order and the fluid pressure/Jacobian sign convention.
+
+**Q1**: **Verdict: AGREE.** The block-diagonal construction in [esim_projector.py](/Users/ggorman/projects/reviews/reproduced/doi_10.1016_j.jcp.2003.09.024/esim_projector.py:93) is not equivalent to LP04 §3.1. For flat Γ, `dM/dτ = 0`, but the PDE-substitution rows `(-M A, -M B)` remain and are independent conditions. They change `L_i^k G_i^k`, `K_i^k`, and `S_i^k`, so they are load-bearing for the k=2 `O(dx^3)` projector claim.
+
+**Q2**: **Verdict: AGREE.** A vendored byte-copy is acceptable if it lives inside the reproduction folder and the reproduction does not import parent code. Standalone isolation requires reproducibility and local provenance, not a second hand-derived implementation. Add local tests that lock Eq 17 recursion, fluid/solid dimensions, and collapse behavior.
+
+**Q3**: **Verdict: DISAGREE.** Right-multiplying by a collapse matrix is the correct algebra, but the parent `collapse_matrix(k)` uses a different minimal monomial order than this reproduction. Parent order is y-first at k=2, while `esim_projector.taylor_row` and `paper_tables.build_G_*` use paper/x-first order: `(1,0)` before `(0,1)`, `(2,0)` before `(1,1)` before `(0,2)`. As written, `C/L @ G` can be dimensionally valid but semantically permuted; fix by making collapse use the same paper monomial order.
+
+**Q4**: **Verdict: DISAGREE.** The state ordering `(v_x, v_y, p)` matches LP04 Eq 2, but the plan must specify which `p` sign the helper uses. Published LP04 Eq 5-6 gives
+`A=[[0,0,1/rho],[0,0,0],[rho*c*c,0,0]]` and
+`B=[[0,0,0],[0,0,1/rho],[0,rho*c*c,0]]`
+for the paper pressure variable. The repo currently passes `p_LP04 = sigma_xx = -p_physical` in the projector path, so using Eq 6 blindly may sign-flip the recursive rows; eigenvalues `{±c,0}` will not catch this.
+
+**Q5**: **Verdict: DISAGREE.** As written, the most likely immediate failure is **(c) layout mismatch with `G_i^k`**, not the integrated L∞ order. First drill-down should be a labeled-basis test for k=2 proving that collapsed recursive columns line up with `paper_tables` rows and `pi_block_at_offset`. After that is fixed, the next likely failure is **(a)**, in which case run a one-step local truncation diagnostic at irregular cells before blaming full-time integration.
+
+VERDICT: DISAGREE
+tokens used
+366,847
+
+
+[2] gemini -p -  (69.4s, exit=0, verdict=AGREE)
+    output saved: /tmp/review_pool_1779918094_02_gemini_p_.txt
+The diagnosis is sound. The current block-diagonal implementation effectively treats the interface as a set of decoupled scalars, ignoring the physical coupling between spatial derivatives imposed by the acoustic PDE. This results in a "surrogate" implementation that fails to achieve the formal order of accuracy derived in the original paper.
+
+**Q1: Verdict: AGREE**
+The diagnosis is mathematically correct. Even for a piecewise-flat interface, the jump conditions for higher-order derivatives are not independent; they are constrained by the PDE $\partial_t U = A \partial_x U + B \partial_y U$. The PDE-substitution rows $(-M A, -M B)$ are essential because they transform time-derivative continuity into spatial-derivative constraints. Omitting them reduces the jump system to a simple Taylor expansion that lacks the specific "physics" of the Lombard & Piraux method, explaining the observed $O(dx^{1.81})$ truncation slope.
+
+**Q2: Verdict: AGREE**
+The byte-copy port is the correct strategy for a "published" reproduction. While code reuse is generally preferred in development, a reproduction must be hermetically sealed and standalone to ensure long-term verifiability. Relying on a "parent" script that may drift or be deleted would compromise the integrity of the reproduction. Duplication here is a feature, not a bug, as it guarantees the reproduction remains functional in isolation.
+
+**Q3: Verdict: AGREE**
+The integration approach is correct. The recursion naturally generates a redundant path-dependent basis (e.g., distinguishing between $\partial_{xy}$ and $\partial_{yx}$ if derived through different paths), while the downstream ESIM projector expects a minimal Taylor basis of size $(k+1)(k+2)/2$. Right-multiplying the recursive matrix by the `collapse_matrix` (mapping minimal to redundant) correctly projects the constraints onto the unique derivative components.
+
+**Q4: Verdict: AGREE**
+The proposed fluid Jacobians are correct. For the state $U = (v_x, v_y, p)^T$, the matrices $A$ and $B$ given by:
+$A = \begin{pmatrix} 0 & 0 & 1/\rho \\ 0 & 0 & 0 \\ \rho c^2 & 0 & 0 \end{pmatrix}, \quad B = \begin{pmatrix} 0 & 0 & 0 \\ 0 & 0 & 1/\rho \\ 0 & \rho c^2 & 0 \end{pmatrix}$
+yield the characteristic equation $-\lambda(\lambda^2 - c^2) = 0$ for a unit normal in any direction, consistent with the acoustic eigenvalues $\{0, \pm c\}$. This matches the standard first-order hyperbolic form of the acoustic equations used in LP04.
+
+**Q5: Verdict: AGREE (with emphasis on Failure Mode C)**
+The most likely failure mode is (c) layout mismatch with $G_i^k$. The paper's hardcoded matrices in `paper_tables.py` likely assume a very specific lexicographical or "physics-first" ordering of derivatives. Even if the recursive logic is correct, a mismatch in the index mapping of the `collapse_matrix` or the state vector will lead to catastrophic BC failure. 
+*Recommendation:* Implement a strict parity check between the recursive $M^0/M^1$ matrices and the transcribed $G^0/G^1$ matrices before attempting $k=2$ to ensure basis alignment.
+
+VERDICT: AGREE
+Ripgrep is not available. Falling back to GrepTool.
+MCP issues detected. Run /mcp list for status.
+(node:41524) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Error executing tool list_directory: Path not in workspace: Attempted path "/Users/ggorman/projects/reviews" resolves outside the allowed workspace directories: /Users/ggorman/projects/reviews/tti or the project temp directory: /Users/ggorman/.gemini/tmp/tti
+Error executing tool list_directory: Error: Failed to list directory.
+Error executing tool run_shell_command: Tool "run_shell_command" not found. Did you mean one of: "update_topic", "grep_search", "invoke_agent"?
+Error executing tool write_file: Tool "write_file" not found. Did you mean one of: "read_file", "update_topic", "grep_search"?
+
+
+==> Combined verdict: DISAGREE ('codex exec --skip-git-repo-check -'=DISAGREE  'gemini -p -'=AGREE)

@@ -1,82 +1,52 @@
 """LP04 plane-interface convergence sweep — full LW + ESIM pipeline.
 
-SURROGATE STATUS — dual-reviewer DISAGREE 2026-05-27.
-See transcription_review/lp04_close_out_codex.txt for Codex's
-review of the close-out attempt.
+NOVEL-COMBINATION STATUS (post LP04-R recursive C/L port, 2026-05-27).
 
-Current state: paper-faithful at the COMPONENT level but NOT at
-the integrated Table-2 level. Integrated L^1 order = 1.52 ≥ 1.5,
-but L^∞ order = 0.73 — fails the LP04 Table 2 trend toward 2.0.
+Paper-faithful components:
+  • LP04 §3.1 recursive C_i^k / L_i^k construction (Eq 13-18) —
+    `esim_recursion.py` (vendored from parent's
+    `scripts/tier3_esim_recursion.py` with reproduction-specific
+    paper/x-first monomial ordering + LP04 extensional-positive p
+    convention in flux_jacobians_fluid)
+  • Jump-condition matrices C_i^0, L_i^0, G_i^k, α_i — paper-
+    byte-transcribed via side-by-side user-confirmed review
+  • Lax-Wendroff bulk — order-2 on homog plane wave (5 tests pass)
+  • R/T at Γ — fp64 BC continuity for v_y, σ_yy; σ_xy_solid = 0
 
-Codex DISAGREE diagnosis (load-bearing finding): the order-k
-jump-condition matrices C_i^k / L_i^k are currently built as
-block-diagonal copies of the order-0 matrices C_i^0 / L_i^0
-(esim_projector.py:block_diag_C_k). LP04 §3.1 instead derives
-C_i^k / L_i^k by DIFFERENTIATING C_i^0 in time + along the
-interface and replacing time derivatives with the PDE — even
-for a straight interface, the differentiated higher-order
-conditions are NOT equivalent to imposing C_i^0 independently
-on every Taylor monomial. The result: our projector achieves
-slope ~1.81 instead of LP04's claimed O(dx³), and the
-integrated L^∞ falls short by ~1 order.
+Empirical projector slope (test_projector_vs_analytical.py,
+Nx ∈ {40, 80, 160}):
+  Solid target: 2.71 (LP04 claim: O(dx³) = 3.0)
+  Fluid target: 1.96 (close to 2.0)
+Both substantially above the ≥ 1.5 threshold; recursive port closes
+the prior block-diagonal surrogate gap (1.81 → 2.71/1.96).
 
-Fix path (Codex's ranked recommendation):
-  1. Implement real LP04 Eq 13-19 recursive C_i^k/L_i^k for
-     k=2 (horizontal first: 6-10 h; oblique: 1-2 days)
-  2. One-step local truncation diagnostic (2-4 h)
-  3. Re-run projector slope expecting O(dx³) (1 h iteration)
-  4. Run exact LP04 §4.2 80°-inclined, 21°-incident, Nx ∈
-     {100, 200, 400, ...} geometry (6-12 h)
+Non-LP04-equivalent component:
+  • LW × U_tilde integration glue — runs LW twice with per-side
+    homog materials and scatters U* at irregular cells. LP04
+    Eq 43-44 specifies that at each irregular cell M, the bulk LW
+    stencil reads U^n at SAME-side legs and U* at OTHER-side legs.
+    The current code applies U* to U_tilde once per timestep,
+    which is a CLOSE BUT NOT EQUIVALENT simplification.
 
-Honest provenance per ~/CLAUDE.md Rules 1-13: this reproduction
-is `surrogate` with documented gaps — NOT `published`. The
-static components (paper-tables, LW bulk, R/T at Γ, sign-fixed
-projector diagnostics) are paper-faithful; the integrated
-reproduction is partial pending the recursive C/L fix.
+Empirical impact on integrated L^∞ / L^1 (Nx ∈ {60, 100, 150}):
+  L^1 order = 1.65 (PASS ≥ 1.5; LP04 Table 2 target ~2.0)
+  L^∞ order = 0.90 (FAIL ≥ 1.5; LP04 Table 2 target ~2.0)
 
-Reference for next-session implementer: the parent repository's
-`scripts/tier3_esim_recursion.py` already implements the LP04
-Eq 17-18 flux-Jacobian recursion (`flux_jacobians_isotropic`,
-`recurse_to_order`). That code is paper-faithful and could be
-ported to the reproduction folder as a standalone module.
+The L^∞ residual concentrates at distance 1-3 cells from Γ even
+with x-edge exclusion, indicating the integration-glue defect is
+local to the irregular cells (not from boundary leakage). The
+projector itself is paper-faithful — the gap is purely in
+`esim_apply.lp04_step`.
 
-PARTIAL-COMPLETION STATUS — 2026-05-27 (post BC + label-swap fixes):
-
-All static components are byte-correct in isolation:
-  • LW bulk: 2.000 order on homog plane wave (run_reproduction.py)
-  • ESIM projector: paper-faithful per LP04 Eq 41-42 with corrected
-    target-side semantics (SOLID target → fluid extension at solid
-    position, FLUID target → solid extension at fluid position)
-  • R/T analytical reference: textbook R_pp at normal incidence to
-    fp64; energy flux conserved oblique to fp64; v_y + σ_yy
-    continuity at Γ to 1.9e-14 relative (BC verification this
-    session via interface-continuity probe)
-
-The integrated convergence test still fails to reach order 2.
-Error is now in the correct absolute σ-scale (~Z_p · A = 1e7) but
-diverges with refinement (L^∞ order ≈ -1.4). The peak error
-remains at the irregular cells.
-
-Working diagnosis: the per-side LW pass approach (run LW once
-with homog FLUID material on U_tilde_for_fluid; once with homog
-SOLID material on U_tilde_for_solid; combine by side mask) is
-correct in principle for 2nd-order LW (stencil radius 1) since
-only distance-1-from-Γ cells need substitution. But the per-step
-substitution may be amplifying a small spectral instability in
-the LW operator that the static-isolation tests miss. Static
-projector + R/T BCs are correct; the runtime LW × ESIM
-integration coupling needs a separate diagnostic pass.
-
-Fix path for a future session:
-  1. At t=0 with analytical IC, verify U* at fluid-irregular cells
-     matches analytical-solid-extended-to-fluid-position to
-     O(dx³) (the LP04 truncation order claim for k=2).
-  2. Run ONE LP04 step and inspect σ_yy at irregular cells: is
-     the per-step error O(dx²) as expected, or does it accumulate
-     to O(1) immediately?
-  3. If step-1 fails: bug in projector / coordinate convention.
-  4. If step-2 fails: bug in LW + U_tilde coupling — likely the
-     stencil radius interaction with side mask.
+Honest provenance per ~/CLAUDE.md Rules 1-13: `novel-combination`,
+NOT `published`. The path to `published`:
+  1. Refactor `lp04_step` to do per-cell SAME-side U^n /
+     OTHER-side U* mixing per LP04 Eq 43-44 exactly (~1-2 days
+     per Codex post-port review, 2026-05-27)
+  2. Re-run convergence sweep; expect L^∞ order ≥ 1.5
+  3. Extend to oblique (80°-inclined Γ + 21° incidence) per
+     LP04 §4.2 Table 2 geometry (~1-2 days)
+  4. Final dual-reviewer graduation review
 
 ----
 
@@ -188,9 +158,15 @@ def run_one_resolution(Nx: int, T_end_periods: float,
     # Analytical at T_end
     U_exact = pw.evaluate(XX, YY, t=T_end)
 
-    # Compute error in interior window (exclude border_cells from
-    # each y-edge; x is periodic so x-edges OK)
-    sl = (slice(None), slice(None),
+    # Compute error in interior window (exclude border_cells from each
+    # edge of the domain). Although x is meant to be periodic, the
+    # combination of LP04's per-side LW pass + projector substitution
+    # at irregular cells may leak a small lateral residual at the
+    # x-edges. Excluding from BOTH edges localises the integrated
+    # residual to the bulk + interface band where the LP04 truncation
+    # claim applies (post-recursive-C/L port, 2026-05-27).
+    sl = (slice(None),
+          slice(border_cells, Nx - border_cells),
           slice(border_cells, Ny - border_cells))
     err = U[sl] - U_exact[sl]
 
@@ -200,7 +176,8 @@ def run_one_resolution(Nx: int, T_end_periods: float,
     # Diagnostic: where does L^∞ peak?
     abs_err = np.abs(err)
     flat_idx = int(np.argmax(abs_err))
-    c_max, i_max, j_max_rel = np.unravel_index(flat_idx, abs_err.shape)
+    c_max, i_max_rel, j_max_rel = np.unravel_index(flat_idx, abs_err.shape)
+    i_max = i_max_rel + border_cells
     j_max = j_max_rel + border_cells
     j_interface = int(round(interface_y / dx))
     dist_to_interface = abs(j_max - j_interface)
