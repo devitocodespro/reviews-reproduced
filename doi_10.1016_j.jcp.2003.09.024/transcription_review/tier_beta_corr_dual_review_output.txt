@@ -1,0 +1,2998 @@
+==> review-pool: submitting prompt to 2 reviewer(s) in parallel:
+    [1] codex exec --skip-git-repo-check -
+    [2] gemini --skip-trust -p -
+
+[1] codex exec --skip-git-repo-check -  (424.9s, exit=0, verdict=AGREE)
+    output saved: /tmp/review_pool_1779893348_01_codex_exec_skipgitrepocheck_.txt
+1. **Q1a**  
+VERDICT: AGREE. The identity is correct: for a linear row operator \(H_M(U)=A_M U + b_M\), the difference is \(H_M(\tilde U)-H_M(U)=A_M(\tilde U-U)\), and any additive source term cancels. Same-side stencil legs have \(\tilde U=U^n\), so only cross-interface legs contribute. This remains true for the RSG elastic update because the velocity and stress equations are linear combinations of old state components with fixed coefficients. Algorithm recommendation: assemble the correction rows directly from the same bulk stencil weights, using `U* - U^n` only on cross-Γ legs. This matches the LP04 read-substitution view in Lombard & Piraux 2004, DOI [10.1016/j.jcp.2003.09.024](https://www.sciencedirect.com/science/article/pii/S0021999103005126).
+
+2. **Q1b**  
+VERDICT: AGREE. Bulk-then-add is algebraically identical to a read-time LP04 operator as long as the correction is computed from the old time slice \(U^n\), not from the post-bulk \(U^{n+1}\). A non-irregular target row has no cross-Γ stencil legs by definition, so LP04 and bulk are identical for that row even if one of its source cells is itself irregular for its own update. If a target cell \(N\) reads a source cell \(M\) on the opposite side, then \(N\)'s stencil crosses Γ, so \(N\) is an irregular row and gets its own \(\Delta_N\). The source cell being irregular is not the criterion; the target row’s read geometry is. Algorithm recommendation: correct all and only target rows whose stencil support crosses Γ, on both sides of the interface, then scatter-add into `U.forward` at those target rows.
+
+3. **Q2a**  
+VERDICT: AGREE. Use an SVD-based SciPy solve with explicit rank control, not `numpy.linalg.pinv` defaults and not ridge as the primary method. The best recipe is `scipy.linalg.lstsq(M_scaled, I, cond=1e-10, lapack_driver="gelsd")`, or equivalently `scipy.linalg.pinv(..., rtol=1e-10, return_rank=True)`, with column scaling of the Taylor basis before the solve and unscaling afterward. SciPy documents that `lstsq` uses the `cond * largest_singular_value` cutoff for effective rank and returns both `rank` and singular values; `gelsd` is the default recommended driver ([SciPy lstsq docs](https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.lstsq.html)). `rtol=1e-10` is a good production cutoff here: it leaves median \(cond(M)\approx 10^5\) cells untouched and rejects modes that would amplify fp64 roundoff by \(10^{10}\). The \(cond(M)\approx 4.5\times10^{16}\) edge cells are numerically rank-deficient in double precision; skip them, enlarge/recenter \(B\), or locally reduce \(k\), rather than pretending a stable inverse exists. Tikhonov can be a diagnostic fallback, but it biases the LP04 projector and should not replace rank-based rejection. Current workspace versions checked: NumPy 2.3.3, SciPy 1.15.3; NumPy’s default `pinv` cutoff is still `1e-15`, which is too permissive for these edge cells ([NumPy pinv docs](https://numpy.org/doc/stable/reference/generated/numpy.linalg.pinv.html)).
+
+4. **Q2b**  
+VERDICT: AGREE. The right production path is CPU sparse/block-sparse correction beside the CPU Devito bulk operator; do not move this to GPU unless the whole Devito timestep is already GPU-resident. Because the state is naturally 5-component, store both \(N\) and \(C\) as BSR with blocksize `(5,5)` and cell-major flattening, not scalar CSR first; SciPy explicitly recommends BSR for sparse matrices with dense submatrices ([SciPy BSR docs](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.bsr_matrix.html)). On this workspace, a synthetic 3M-scalar-nnz BSR matvec ran at ~2.7 ms median, while scalar CSR was ~10.6 ms, so BSR is the better first implementation. If BSR SciPy misses the <10 ms budget once both \(N\) and \(C\) are included, move to oneMKL Sparse BLAS `mkl_sparse_d_mv` with preallocated buffers and fixed sparsity ([Intel oneMKL docs](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2023-1/mkl-sparse-mv.html)). cuSPARSE is excellent but only wins if vectors already live on device; its `cusparseSpMV` supports CSR/BSR and preprocessing for repeated patterns, but host-device transfer would dominate in a CPU Devito loop ([NVIDIA cuSPARSE docs](https://docs.nvidia.com/cuda/cusparse/index.html)). Avoid hand AVX512 until profiling proves oneMKL/BSR cannot meet budget; if needed, hand-tune the fixed 5×5 block kernel, not generic CSR.
+
+SUMMARY: Implement ESIM as a stationary precomputed sparse/block-sparse correction operator, with SVD-rank-filtered projector tables and CPU BSR/MKL matvecs after each bulk Devito step.  
+VERDICT: AGREE
+OpenAI Codex v0.133.0
+--------
+workdir: /Users/ggorman/projects/reviews
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR] (network access enabled)
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019e69e9-2ebc-7302-b8a0-0cdc14168ec7
+--------
+user
+Architectural sanity-check + library-choice review for an ESIM (Explicit Simplified Interface Method) implementation in a 2D rotated-staggered-grid (RSG) elastic finite-difference solver.
+
+═══════════════════════════════════════════════════════════════════════
+CONTEXT
+═══════════════════════════════════════════════════════════════════════
+
+We're implementing Lombard-Piraux 2004 (DOI 10.1016/j.jcp.2003.09.024) ESIM for a 2D RSG elastic solver on a Petrobras dipping fluid-solid interface (dx=0.005 km, Lx=6.0 km, Ly=4.30 km, dip=30°, ~11,913 irregular cells along Γ, RSG SO=8).
+
+The seabed Γ is a STATIONARY 1D manifold in 2D (a straight dipping line). So the LP04 per-cell projector tensors are TIME-INVARIANT. We precompute them once and apply each timestep.
+
+We've already built and verified:
+- Tier 3 scaffold (paper-faithful algebra through k=2, validated on Tier α plane-wave h-refinement to fp64).
+- β.1 host-side precompute API (`scripts/tier3_esim_precompute.py` → `ESIMTables`).
+- β.3 packed Devito-friendly storage (`scripts/tier3_esim_storage.py` → `PackedESIMTables`, ~98 MB at Petrobras scale).
+- β.4.1 small-scale Devito prototype (validated indirect-indexing pattern in a compiled stencil; passes at 100 cells × 41 offsets, 0.64 ms apply).
+- β.4.2 SCAFFOLD failed at full Petrobras: the offset alphabet at production is ~115 distinct relative offsets (because the disk B around the cell's interface projection has variable cell-to-projection offset). The unrolled Devito stencil has ~14k symbolic terms; gcc JIT compile stalls indefinitely.
+
+A user reframe surfaced the right architecture: this is a **SPARSE LINEAR OPERATOR** problem, not a Devito-stencil problem. The LP04 substitution can be decomposed as bulk + correction, with the correction being a sparse matrix-vector product. Then we don't fight Devito at all — the bulk RSG operator runs unmodified, and a sparse correction step runs post-bulk each timestep.
+
+═══════════════════════════════════════════════════════════════════════
+QUESTION 1 — Correction-term decomposition (math)
+═══════════════════════════════════════════════════════════════════════
+
+LP04 Eq 43-44 says: at irregular cell M, the discrete operator H reads U^n at SAME-side stencil legs and U* at CROSS-Γ legs.
+
+For a LINEAR discrete operator H (which our RSG is — it's a sum of stencil-weight × U value products with no nonlinear function applied to U):
+
+    U^(n+1, LP04)_M = H_M(Ũ_neighbours)
+    U^(n+1, bulk)_M  = H_M(U^n_neighbours)
+    Δ_M := U^(n+1, LP04)_M - U^(n+1, bulk)_M
+         = H_M(Ũ - U^n)
+         = sum over CROSS-Γ legs (α,β) at M:
+             stencil_weight[M, (α,β), c_out, c_in]
+             × (U*_(M+α,β, c_in) - U^n_(M+α,β, c_in))
+
+where Ũ has U^n at same-side legs (zero difference, no contribution) and U* at cross-Γ legs.
+
+Each cell M has typically 5-15 CROSS-Γ legs (half the SO=8 diagonal stencil). Total non-zeros in the sparse correction matrix C:
+  n_cells × n_state² × n_cross_leg_avg ≈ 12000 × 25 × 10 = ~3M
+
+Per-timestep flow:
+  1. Standard Devito op.apply(time_m=n, time_M=n, dt=dt) advances U → U^(n+1, bulk) everywhere.
+  2. SpMV #1: U_star_per_cell = N @ flatten(U^n)  [precomputed N row vectors per β.3].
+  3. SpMV #2: delta_per_cell = C @ (U_star - U^n_at_cross_neighbours).
+  4. Apply: U.data[c, target_i[cell], target_j[cell]] += delta_per_cell[cell, c] at all irregular cells.
+
+VERDICT QUESTIONS:
+
+Q1a. Is the correction-term decomposition Δ_M = H_M(Ũ - U^n) MATHEMATICALLY CORRECT for the LP04 substitution under linearity of H? Verify via algebraic identity. Note: the RSG operator H has the form
+  v^(n+1) = v^n + dt/ρ · (∂_x σ_components + ∂_y σ_components)
+  σ^(n+1) = σ^n + dt · Cij · (∂_x v_components + ∂_y v_components)
+which IS linear in the field U at each cell.
+
+Q1b. Does running the BULK operator without LP04 substitution at irregular cells, then ADDING Δ post-hoc, give the same final state U^(n+1) as a hypothetical operator that did read-time LP04 substitution everywhere? In particular: at non-irregular cells whose stencil reads an irregular cell, do we need any correction too?
+   - Hypothesis: at non-irregular cell N, the stencil reads neighbours including possibly irregular cells M. For LP04 correctness, N should read U^n_M at those positions (same-side from N's perspective if N and M are on the same side; OPPOSITE side otherwise). Bulk operator already reads U^n_M correctly. So no correction needed at N.
+   - But wait: if N is on the OPPOSITE side from M, the bulk read of U^n_M gives N the "wrong-side" value. LP04 says N should read U*_M (extrapolation from N's side). This means N IS irregular too (its stencil crosses Γ), and the correction Δ_N handles this case.
+   - So the correction is needed at ALL irregular cells (both sides of Γ), which is what we already have.
+
+═══════════════════════════════════════════════════════════════════════
+QUESTION 2 — Numerical library choice for ill-conditioned pseudoinverse
+═══════════════════════════════════════════════════════════════════════
+
+In the LP04 precompute (`scripts/tier3_esim_projector.py`), we compute the pseudoinverse of the over-determined Taylor-fit matrix M (LP04 Eq 38-40):
+  Mbar^{-1} = pinv(M)  followed by row-restriction to the W_1 unknowns
+
+M has shape (n_eq, n_unknown) where n_eq = state_components × |B| (≈ 5 × 40 = 200) and n_unknown = n_w1 + n_lambda (≈ 30).
+
+At the BULK of cells, cond(M) ≈ 1.4e5 (median). At 4 EDGE cells out of 11,917 (interface exits the grid bottom), cond(M) blows up to 4.5e16 due to disk-B asymmetry (~3 cells on one side, ~15 on the other). We currently DROP those cells via a min-per-side filter (in-sponge so the drop is harmless for Petrobras; documented in plan §"Tier β robustness").
+
+The user asks: which numerical library/algorithm is best for inverting/curve-fitting WITH ill-conditioned or degenerate data?
+
+CANDIDATE LIBRARIES + ALGORITHMS:
+
+(A) `numpy.linalg.pinv` — current default. Moore-Penrose pseudoinverse via SVD with `rcond` truncation. Stable but not optimised for ill-conditioned cases.
+
+(B) `scipy.linalg.pinv` — wraps LAPACK gelsd. More explicit rcond control.
+
+(C) `scipy.linalg.lstsq` with explicit rcond — LAPACK gelsd (SVD-based, divide-and-conquer), returns least-squares solution + rank. The rank info lets us detect degenerate cells programmatically.
+
+(D) Tikhonov / ridge regularisation — adds λ·I to M^T M; trades bias for numerical stability. Per-cell adaptive λ.
+
+(E) Truncated SVD (sklearn.decomposition.TruncatedSVD or manual via scipy.linalg.svd) — keep only top-k singular values. Effective rank reduction.
+
+(F) Randomised SVD (Halko-Martinsson-Tropp) — for large matrices, not relevant here (M is tiny).
+
+(G) Pivoted QR / Rank-revealing QR — alternative rank-detection mechanism.
+
+For our case: M is small (200×30) so all candidates are fast. The discriminator is ROBUSTNESS to varying cond(M). At the worst 4 cells, what's the most principled handling?
+
+VERDICT QUESTIONS:
+
+Q2a. For the LP04 pseudoinverse precompute (per-cell M ~200×30, varying cond from 1e5 to 1e16), what's the best library + parameter recipe? Specifically:
+  - scipy.linalg.lstsq with rcond=1e-10? Tighter or looser?
+  - Tikhonov with λ = 1e-8 · σ_max(M)?
+  - Detect rank-deficiency via rank-revealing QR + skip-flag (cleaner than drop-by-side-count)?
+
+Q2b. For the per-timestep SpMV at production (3M-NNZ matrix C applied 8800 times):
+  - scipy.sparse.csr_matrix.dot (~5-10 GFlops/s with OpenMP via scipy.sparse)
+  - Intel MKL Sparse BLAS (scipy.sparse interface; ~2-5× faster on Intel CPUs)
+  - cuSPARSE (10-100× faster on GPU)
+  - Hand-tuned AVX512 + OpenMP custom SpMV
+  Given Devito itself runs on CPU and the per-step overhead budget is < 10 ms (~1% of baseline RSG step time), what's the right choice?
+
+═══════════════════════════════════════════════════════════════════════
+QUESTION 4 — Existing IBM/cut-cell/correction-term packages (was QUESTION 4; user clarified scope to mean numerical libraries, NOT domain IBM packages — SKIPPED)
+═══════════════════════════════════════════════════════════════════════
+
+(Per user clarification, this question is REPLACED by Q2 above's library focus on SVD/pinv/SpMV libraries.)
+
+═══════════════════════════════════════════════════════════════════════
+OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════════════
+
+Four numbered sections — Q1a, Q1b, Q2a, Q2b. Each section:
+ - VERDICT: AGREE | DISAGREE | INCONCLUSIVE
+ - 4-8 sentences of justification
+ - Specific library / algorithm recommendation with rationale
+ - DOI / package version citations where applicable
+
+End with two lines:
+SUMMARY: <one-sentence overall recommendation for the implementation>
+VERDICT: <AGREE | DISAGREE | INCONCLUSIVE>
+
+codex
+I’ll use the Devito skill for the finite-difference/solver architecture angle, then verify the numerical-library/version claims against current primary docs before giving the verdict.
+exec
+/bin/zsh -lc "sed -n '1,220p' /Users/ggorman/projects/devito-skill/SKILL.md" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+---
+name: devito
+description: Use this skill when writing finite difference codes using Devito, a Python DSL for symbolic PDE specification and automatic code generation. Apply for (1) acoustic/elastic wave propagation and seismic modeling (RTM, FWI), (2) CFD simulations (convection, diffusion, Navier-Stokes, cavity flow), (3) heat diffusion and thermal problems, (4) any PDE-based simulation requiring optimized stencil computation, (5) MPI-parallel or GPU-accelerated PDE solvers, (6) source injection and receiver interpolation at arbitrary coordinates.
+---
+
+<!--
+Skill metadata:
+- Author: Gerard Gorman
+- License: https://github.com/devitocodes/devito/blob/main/LICENSE.md
+- Repository: https://github.com/devitocodes/devito
+-->
+
+# Devito - Finite Difference DSL for Symbolic PDE Computation
+
+## Overview
+
+Devito is a Python-based domain-specific language (DSL) and code generation framework for solving partial differential equations (PDEs) through symbolic computation. You write the math; Devito generates optimized C/C++ loops with automatic parallelization (OpenMP, MPI, GPU).
+
+## CRITICAL: Use Devito DSL, Not NumPy
+
+**Always generate Devito DSL code, not raw NumPy implementations.**
+
+The Devito example notebooks (especially in `examples/cfd/`) follow a pedagogical pattern:
+1. First, they show a **NumPy reference implementation** (manual loops, array slicing)
+2. Then, they show the **Devito DSL implementation** (symbolic, auto-optimized)
+
+When writing code with this skill, **always use the Devito DSL approach**:
+
+```python
+# BAD - NumPy manual loops (DO NOT generate this)
+for n in range(nt):
+    un = u.copy()
+    u[1:-1] = un[1:-1] + nu * dt / dx**2 * (un[2:] - 2*un[1:-1] + un[:-2])
+
+# GOOD - Devito DSL (ALWAYS generate this)
+from devito import Grid, TimeFunction, Eq, Operator
+grid = Grid(shape=(nx,), extent=(lx,))
+u = TimeFunction(name="u", grid=grid, time_order=1, space_order=2)
+eq = Eq(u.forward, u + nu * dt * u.dx2)
+Operator(eq)(time=nt, dt=dt)
+```
+
+**Why Devito DSL:**
+- Automatic C code generation with compiler optimizations
+- Automatic parallelization (OpenMP, MPI, GPU)
+- Symbolic derivatives (no manual stencil coding)
+- Dimension-agnostic code (same code works 1D/2D/3D)
+
+## CRITICAL: Update Equations Must Have Explicit LHS Assignment
+
+**Devito Operators require equations with an explicit assignable LHS (left-hand side).**
+
+The Operator compiles equations into C code. Each equation must tell Devito **what variable to update**. A symbolic PDE constraint like `Eq(u.dt2, c**2 * u.dx2)` does NOT work because it has no assignable target.
+
+```python
+# WRONG - Symbolic PDE form passed directly to Operator
+# This generates INVALID C code and fails to compile!
+pde = Eq(u.dt2, c**2 * u.dx2)
+op = Operator([pde])  # ERROR: "expression is not assignable"
+
+# CORRECT - Use solve() to derive update equation
+from devito import solve
+pde = Eq(u.dt2, c**2 * u.dx2)
+update = Eq(u.forward, solve(pde, u.forward))  # Explicit LHS: u.forward
+op = Operator([update])  # Works correctly
+
+# ALSO CORRECT - Manual stencil with explicit LHS
+update = Eq(u.forward, 2*u - u.backward + dt**2 * c**2 * u.dx2)
+op = Operator([update])  # Works correctly
+```
+
+**The Rule:** Every `Eq()` passed to `Operator()` must have a **single assignable symbol** on the LHS:
+- `u.forward` - next time step
+- `u[t+1, x, y]` - indexed access
+- `p` - static function update
+
+**Never pass** `Eq(u.dt2, ...)` or `Eq(u.dt, ...)` directly to an Operator.
+
+## CRITICAL: Use Proper Unit Scaling for Numerical Stability
+
+**Always scale quantities to O(1) to prevent floating-point catastrophe, especially for FP32/GPU.**
+
+Finite difference stencils are "catastrophic cancellation machines"—every derivative computation subtracts nearby values. When field values are large (e.g., pressure in Pascals ~10^6), the meaningful differences lose significant digits.
+
+### The Principle: Scale to O(1)
+
+This applies to **all domains**, not just seismic modeling. Make sensible unit choices based on your problem:
+
+| Domain | Sensible Choice | Poor Choice | Reasoning |
+|--------|----------------|-------------|-----------|
+| Seismic | km/s, km, g/cm³ | m/s, m, kg/m³ | Wave speeds 1-6 km/s become O(1) |
+| CFD | Normalize L=1, U=1, use Re | SI units directly | Reynolds number formulation |
+| Heat transfer | Normalize to ΔT=1, L=1 | Kelvin, meters | Dimensionless form |
+| Microfluidics | μm, μs | m, s | Characteristic scales are microscale |
+
+**The goal:** All coefficients in your discretized equations should be O(1), not 10^6 or 10^-6.
+
+```python
+# GOOD - Quantities scaled to O(1) for the problem at hand
+# Seismic example: km/s units
+grid = Grid(shape=(201, 201), extent=(2.0, 2.0))  # 2 km domain
+c = 1.5  # km/s
+
+# CFD example: normalized units
+grid = Grid(shape=(100, 100), extent=(1.0, 1.0))  # Unit domain
+Re = 100  # Reynolds number
+nu = 1.0 / Re  # Dimensionless viscosity
+
+# BAD - Large magnitude ratios cause precision loss
+c = 1500  # m/s when domain is in km → mixed scales
+pressure = 101325  # Pa when other quantities are O(1)
+```
+
+### Why This Matters
+
+- **FP32 has ~7 decimal digits** - magnitude ratios > 10^6 cause absorption/cancellation
+- **GPU computing uses FP32** - NVIDIA Tensor Cores: 125 TFLOP/s FP16 vs 7.8 TFLOP/s FP64
+- **Long simulations accumulate error** - 10^6 timesteps leaves only ~4 reliable digits in FP32
+
+**Rule of thumb:** Keep all quantities within 10^-3 to 10^3 for FP32 safety. Choose units that make this natural for your problem.
+
+See `references/units-numerical-precision.md` for detailed guidance on non-dimensionalization, unit verification with **pint** (recommended for development), and common scaling errors.
+
+## CRITICAL: Set `space_order` on All Functions Used Inside Derivatives
+
+**When a `Function` appears inside an expression that is subsequently differentiated, it MUST have `space_order` matching the intended FD accuracy.** Otherwise Devito silently uses a low-order, asymmetric stencil that produces wrong results or numerical instability.
+
+```python
+# BAD — C defaults to space_order=1, corrupts the composed derivative
+C = Function(name='C', grid=grid)  # space_order=1 by default!
+u = TimeFunction(name='u', grid=grid, space_order=8)
+rhs = (C * u.dx).dx  # Uses fd_order=1 for outer .dx — UNSTABLE
+
+# GOOD — C has matching space_order
+C = Function(name='C', grid=grid, space_order=8)
+u = TimeFunction(name='u', grid=grid, space_order=8)
+rhs = (C * u.dx).dx  # Uses fd_order=8 — correct
+```
+
+This affects **any composed derivative** pattern: `(C * u.dx).dx`, `(C * u.dy).dy`, divergence of stress from Hooke's law, etc. It does NOT affect `u.dx2` (direct second derivative) or expressions where the Function is only multiplied, not differentiated through (e.g., `damp * update_expr`).
+
+**Diagnostic:** Print `expr.fd_order` — if it shows `(1,)` when you expect `(8,)`, this is the bug.
+
+See `references/faq-troubleshooting.md` → "Composed Derivatives Inherit `fd_order` from Lowest `space_order`" for full details.
+
+## Code Verification Before Presenting
+
+**When Devito is installed, always verify code compiles and runs before presenting it.**
+
+```python
+# Verification pattern: compile and run minimal test
+try:
+    op = Operator([update])
+    op.apply(time_M=2, dt=dt)  # Run just 2 steps to verify
+    assert np.all(np.isfinite(u.data[0, :])), "Solution contains NaN/Inf"
+except Exception as e:
+    # Code has errors - fix before presenting
+    raise RuntimeError(f"Devito code verification failed: {e}")
+```
+
+Key checks:
+1. **Operator compiles** - no C compilation errors
+2. **Solution is finite** - no NaN or Inf values
+3. **Solution is bounded** - not exploding (stability check)
+
+## Platform-Aware Configuration
+
+When running Devito code, detect the host system and set environment variables accordingly:
+
+1. **Check for GPU availability first:**
+   - NVIDIA: `nvidia-smi` succeeds → set `DEVITO_PLATFORM=nvidiaX`, `DEVITO_ARCH=nvc`, `DEVITO_LANGUAGE=openacc`
+   - AMD: `rocm-smi` succeeds → set `DEVITO_PLATFORM=amdgpuX`, `DEVITO_ARCH=aomp`, `DEVITO_LANGUAGE=openmp`
+   - Intel: `xpu-smi` succeeds → set `DEVITO_PLATFORM=intelgpuX`, `DEVITO_ARCH=sycl`, `DEVITO_LANGUAGE=sycl`
+
+2. **CPU fallback:** If no GPU detected, check available compiler:
+   - `gcc --version` → `DEVITO_ARCH=gcc`, `DEVITO_LANGUAGE=openmp`
+   - `clang --version` → `DEVITO_ARCH=clang`, `DEVITO_LANGUAGE=openmp`
+   - `icx --version` → `DEVITO_ARCH=icx`, `DEVITO_LANGUAGE=openmp`
+
+3. **macOS specifics:** Use `DEVITO_ARCH=clang`, `DEVITO_LANGUAGE=openmp`. Requires `brew install llvm libomp` and LLVM on PATH for OpenMP support.
+
+4. **MPI:** Add `DEVITO_MPI=1` (or `full` for overlap) when launching with `mpirun`.
+
+See `references/faq-troubleshooting.md` → "Environment Variables" for the complete reference table of all 15 `DEVITO_` variables, target presets, and debugging recipes.
+
+## Core Workflow
+
+```
+1. Grid        → Define discrete domain (shape, extent)
+2. Fields      → Create unknowns (TimeFunction) and coefficients (Function)
+3. PDE         → Write derivatives symbolically (.dx, .dx2, .laplace, .dt, .dt2)
+4. Update      → Explicit step: Eq(u.forward, ...) or solve(pde, u.forward)
+5. Compile/Run → Operator([eqs...])(time=Nt, dt=dt)
+6. BCs         → Extra Eq(...) constraints or subdomains
+7. Extract     → Final solution at u.data[Nt % (time_order+1)] (rolling buffer)
+```
+
+For complete API reference (Grid, Function, TimeFunction, SparseTimeFunction, Eq, solve, Operator, derivatives, vector/tensor fields), see `references/dsl-semantics.md`.
+
+## Boundary Conditions
+
+### Indexed Assignment (explicit but not MPI-safe for hardcoded indices)
+```python
+t = grid.stepping_dim
+x, y = grid.dimensions
+bc = [
+    Eq(u[t+1, 0, y], 0.0),      # Left boundary
+    Eq(u[t+1, Nx-1, y], 0.0),   # Right boundary
+]
+```
+
+### Subdomain (MPI-safe, preferred)
+```python
+update = Eq(u.forward, stencil, subdomain=grid.interior)
+```
+
+### Absorbing Layer (sponge)
+```python
+# damp only multiplies — space_order doesn't matter here
+damp = Function(name="damp", grid=grid)
+
+exec
+/bin/zsh -lc "rg --files scripts | rg 'tier3_esim_(projector|precompute|storage)|devito|rsg'" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+scripts/tier3_esim_devito_apply.py
+scripts/tier3_esim_projector.py
+scripts/tier3_esim_devito_proto_scale.py
+scripts/run_rsg_bohlen_saenger_v2.py
+scripts/tier3_esim_storage.py
+scripts/tier3_esim_devito_proto_minimal.py
+scripts/run_rsg_bohlen_saenger.py
+scripts/tier3_esim_precompute.py
+
+exec
+/bin/zsh -lc "python - <<'PY'
+import importlib.metadata as m
+for p in ['numpy','scipy','devito','scikit-learn']:
+    try:
+        print(f'{p} {m.version(p)}')
+    except Exception as e:
+        print(f'{p} unavailable: {e}')
+PY" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+numpy 2.3.3
+scipy 1.15.3
+devito 4.8.22.dev46+g7aae8d96f
+scikit-learn 1.8.0
+
+web search: 
+web search: SciPy linalg.lstsq lapack driver gelsd cond rank documentation scipy 1.15 ...
+web search: 
+web search: https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.lstsq.html
+web search: 
+web search: https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.pinv.html
+web search: 
+web search: Lombard Piraux 2004 Explicit simplified interface method DOI 10.1016/j.jcp.2003.09.024 ...
+web search: 
+web search: NVIDIA cuSPARSE generic sparse matrix vector multiplication SpMV documentation ...
+web search: 
+web search: https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_matrix.html?highlight=scipy+sparse+csr_matrix
+web search: 
+web search: 'SpMV' in https://docs.nvidia.com/cuda/cusparse/index.html
+codex
+The key split looks like an algebraic correction to read-time substitution, so I’m checking the actual projector/precompute code for how the least-squares inverse is currently represented and where rank/condition metadata would fit.
+exec
+/bin/zsh -lc "sed -n '1,260p' scripts/tier3_esim_projector.py" in /Users/ggorman/projects/reviews
+exec
+/bin/zsh -lc "sed -n '1,260p' scripts/tier3_esim_precompute.py" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+"""Tier 3 ESIM projector construction for the dipping-line geometry.
+
+Implements Lombard & Piraux 2004 Eq 42 modified-value projector
+  U*_{I,J} = Π_{I,J}^k · G_1^k · K_1^k · M̄^{-1} · (U^n)_B
+for the SPECIFIC case of a straight dipping fluid-solid interface
+(constant normal/tangent along Γ). This is the host-side precompute
+phase recommended by the Codex+Gemini dual review of 2026-05-27 —
+the per-cell row vector N_{I,J} = Π·G·K·M̄^{-1} is built ONCE per
+irregular cell and later threaded into a Devito-native compiled
+operator via auxiliary Function arrays.
+
+Scope of this initial scaffold:
+  - k = 0 (paper's simplest case; minimal projector). Higher k
+    requires recursively differentiated C_i^k, L_i^k, G_i^k
+    matrices that LP04 builds via formal-calculus iteration of
+    Eq 12-18; deferred until the k=0 static test passes.
+  - Fluid-as-degenerate-solid: both sides modelled with the 5-
+    component elastic state (v_1, v_2, σ_11, σ_12, σ_22). The
+    fluid has Vs ≈ 0 so its stress is isotropic. The LP04 fluid-
+    side 3-component (v_1, v_2, p) state is recovered by collapsing
+    σ_11 = σ_22 = -p, σ_12 = 0 — but for this scaffold we keep
+    both sides 5-component, which is what the actual RSG operator
+    works with. Codex Q4 flagged this approximation as a risk to
+    revisit.
+
+The static projection test (`tier3_esim_static_test.py`) verifies
+on a constant-stress analytic field that U*_estimated == U*_analytic
+to fp64.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from dataclasses import dataclass
+
+import numpy as np
+from numpy.linalg import lstsq, svd, cond, pinv
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'scripts'))
+
+# Reuse the SDF + irregular-cell + RSG-stencil helpers from Tier 1A:
+from it_e_tier1_geometry import (
+    signed_distance_dipping_line,
+    rsg_diagonal_stencil_offsets,
+)
+from tier3_esim_recursion import (
+    flux_jacobians_isotropic,
+    recurse_to_order,
+    pi_row_at_offset,
+    collapse_matrix,
+    minimal_taylor_weights,
+    minimal_multi_indices,
+)
+
+# ─── Geometry primitives ──────────────────────────────────────────────
+
+
+def normal_and_tangent(dip_deg: float) -> tuple[np.ndarray, np.ndarray]:
+    """Unit normal (n) and tangent (t) to the dipping line.
+
+    Convention matches signed_distance_dipping_line:
+        n = (sin θ, cos θ)  pointing into the upper (fluid) layer
+        t = (cos θ, -sin θ) along the line, perpendicular to n
+
+    For LP04's (x', y') parametrisation, (x', y') = t.
+    """
+    th = np.radians(dip_deg)
+    n = np.array([np.sin(th), np.cos(th)])
+    t = np.array([np.cos(th), -np.sin(th)])
+    return n, t
+
+
+def project_to_interface(point_xy: np.ndarray, dip_deg: float,
+                         anchor_xy: np.ndarray) -> np.ndarray:
+    """Orthogonal projection of `point_xy` onto the dipping line through
+    `anchor_xy`. Returns the projected (x_P, y_P) coordinate."""
+    n, _ = normal_and_tangent(dip_deg)
+    d_signed = np.dot(point_xy - anchor_xy, n)
+    return point_xy - d_signed * n
+
+
+def gather_disk_neighbours(target_xy: np.ndarray,
+                            P_xy: np.ndarray,
+                            sdf: np.ndarray,
+                            dx: float,
+                            q_factor: float = 3.5,
+                            shape: tuple[int, int] = None,
+                            anchor_grid_xy: tuple[float, float] = (0.0, 0.0),
+                            ) -> tuple[list[tuple[int, int]],
+                                        list[tuple[int, int]]]:
+    """Gather grid points within the disk B of radius q_factor·dx around P.
+
+    Returns:
+        B_1 : list of (i, j) grid indices on the fluid side (sdf > 0)
+        B_2 : list of (i, j) grid indices on the solid side (sdf < 0)
+
+    The point on Γ itself (sdf ≈ 0) is skipped.
+    """
+    Nx, Ny = sdf.shape
+    radius = q_factor * dx
+    # Grid coords corresponding to sdf[i, j]:
+    #   x_i = anchor_grid_xy[0] + i * dx; y_j = anchor_grid_xy[1] + j * dx
+    # Find candidate index range around P:
+    P_i = (P_xy[0] - anchor_grid_xy[0]) / dx
+    P_j = (P_xy[1] - anchor_grid_xy[1]) / dx
+    i_lo = max(0, int(np.floor(P_i - q_factor)))
+    i_hi = min(Nx, int(np.ceil(P_i + q_factor)) + 1)
+    j_lo = max(0, int(np.floor(P_j - q_factor)))
+    j_hi = min(Ny, int(np.ceil(P_j + q_factor)) + 1)
+
+    B_1, B_2 = [], []
+    for i in range(i_lo, i_hi):
+        x_i = anchor_grid_xy[0] + i * dx
+        for j in range(j_lo, j_hi):
+            y_j = anchor_grid_xy[1] + j * dx
+            dist = np.hypot(x_i - P_xy[0], y_j - P_xy[1])
+            if dist > radius:
+                continue
+            s = sdf[i, j]
+            if s > 1e-12 * dx:
+                B_1.append((i, j))
+            elif s < -1e-12 * dx:
+                B_2.append((i, j))
+            # cells essentially ON the interface: skip
+    return B_1, B_2
+
+
+# ─── Zero-th-order projector building blocks ──────────────────────────
+
+
+def C1_zero_numeric(t: np.ndarray) -> np.ndarray:
+    """LP04 Eq 11: fluid-side 2×3 jump matrix at order 0, evaluated for
+    a specific tangent t = (x', y'). Couples [v·n] = 0 and pressure."""
+    xp, yp = float(t[0]), float(t[1])
+    return np.array([
+        [-yp, xp, 0],
+        [0, 0, xp**2 + yp**2],
+    ], dtype=np.float64)
+
+
+def C2_zero_numeric(t: np.ndarray) -> np.ndarray:
+    """LP04 Eq 11: solid-side 2×5 jump matrix at order 0.
+
+    State ordering U_2 = (v_1, v_2, σ_11, σ_12, σ_22)^T.
+    Row 1: normal velocity component.
+    Row 2: normal-stress continuity n^T σ n · |t|^2 = -p · |t|^2.
+    """
+    xp, yp = float(t[0]), float(t[1])
+    return np.array([
+        [-yp, xp, 0, 0, 0],
+        [0, 0, yp**2, -2 * xp * yp, xp**2],
+    ], dtype=np.float64)
+
+
+def L1_zero_numeric(t: np.ndarray) -> np.ndarray:
+    """LP04 Eq 11: fluid-side 1×3 boundary-condition row (empty for
+    perfect fluid — pressure is unconstrained beyond the jump). The
+    paper carries this row as zero so that K_1^0 = G_1^0 reduces
+    cleanly via the SVD."""
+    return np.zeros((1, 3), dtype=np.float64)
+
+
+def L2_zero_numeric(t: np.ndarray) -> np.ndarray:
+    """LP04 Eq 11: solid-side 1×5 row — vanishing tangential shear
+    t^T σ n = 0."""
+    xp, yp = float(t[0]), float(t[1])
+    return np.array([[0, 0, xp * yp, yp**2 - xp**2, -xp * yp]],
+                     dtype=np.float64)
+
+
+def G_fluid_zero() -> np.ndarray:
+    """LP04 Appendix A.1 at k=0: 3×3 identity (V_1^0 = U_1^0)."""
+    return np.eye(3, dtype=np.float64)
+
+
+def G_solid_zero() -> np.ndarray:
+    """LP04 Appendix A.2 at k=0: 5×5 identity (V_2^0 = U_2^0)."""
+    return np.eye(5, dtype=np.float64)
+
+
+def build_K_via_svd(L: np.ndarray, G: np.ndarray) -> np.ndarray:
+    """Per LP04 Eq 26: V_i^k = K_i^k · W_i^k where K_i^k spans the
+    nullspace of L_i^k · G_i^k.
+
+    Returns K such that (L · G) · K ≈ 0; columns of K form an
+    orthonormal nullspace basis.
+    """
+    LG = L @ G
+    # Nullspace via SVD: smallest singular vectors with sigma ≈ 0
+    U, s, Vt = svd(LG, full_matrices=True)
+    # Tolerance for "zero" singular values:
+    tol = max(LG.shape) * np.finfo(LG.dtype).eps * (s.max() if s.size else 0.0)
+    rank = int((s > tol).sum())
+    K = Vt[rank:, :].T  # nullspace columns
+    return K
+
+
+# ─── Per-cell projector assembly (k=0 only) ───────────────────────────
+
+
+@dataclass
+class CellProjector:
+    """Per-irregular-cell precomputed ESIM master row vector + diagnostics."""
+    cell_idx: tuple[int, int]
+    P_xy: np.ndarray
+    B1: list[tuple[int, int]]
+    B2: list[tuple[int, int]]
+    side: int                # 1 (fluid) or 2 (solid)
+    N: np.ndarray            # master row vector U* = N · (U^n)_B
+    M_cond: float            # condition number of the over-determined M
+    target_state_dim: int    # dimension of U* (3 for fluid side, 5 for solid)
+
+
+def build_M_matrix_general(B1: list[tuple[int, int]],
+                            B2: list[tuple[int, int]],
+                            sdf: np.ndarray,
+                            dx: float,
+                            anchor_grid_xy: tuple[float, float],
+                            P_xy: np.ndarray,
+                            t: np.ndarray,
+                            k: int = 0,
+                            state_components: int = 5,
+                            A_fluid: np.ndarray = None,
+                            B_fluid: np.ndarray = None,
+                            A_solid: np.ndarray = None,
+                            B_solid: np.ndarray = None,
+                            ) -> tuple[np.ndarray, dict]:
+    """General-order M assembly. For k≥1 the flux Jacobians A_*, B_*
+    must be provided (use `flux_jacobians_isotropic` from
+    `tier3_esim_recursion`).
+
+    Acts on the recursively-built U_i^k = (U_i^{k-1}, ∂x U_i^{k-1},
+    ∂y U_i^{k-1}). The monomial layout in U_i^k is the 3^k recursive
+    expansion (NOT the minimal 6-monomial Taylor basis at k=2; the
+    over-determined least-squares handles the redundancy).
+    """
+    xp, yp = float(t[0]), float(t[1])
+    # Build L_i^k, C_i^k via the LP04 recursion. For k=0 the inputs
+    # ARE the zeroth-order matrices.
+    L_1_0 = L1_zero_numeric(t)  # 1×3 zero (for degenerate-solid: 1×5 zero)
+    # Promote to 5-column for degenerate-solid case:
+    if state_components == 5:
+        L_1_0 = np.zeros((1, 5), dtype=np.float64)
+    L_2_0 = L2_zero_numeric(t)
+    C_jump_0 = C2_zero_numeric(t)  # 2×5 generic jump-condition
+
+    if k == 0:
+        L_1 = L_1_0
+        L_2 = L_2_0
+        C_jump = C_jump_0
+    else:
+        if A_fluid is None or B_fluid is None:
+            raise ValueError("flux Jacobians required for k>=1")
+        L_1 = recurse_to_order(L_1_0, A_fluid, B_fluid, xp, yp, k)
+        L_2 = recurse_to_order(L_2_0, A_solid, B_solid, xp, yp, k)
+        C_jump = recurse_to_order(C_jump_0, A_solid, B_solid, xp, yp, k)
+
+    # G_i^k: at k=0 → identity_5; at k≥1 we use identity since the
+    # LP04 Appendix A G matrices for fluid-as-degenerate-solid at the
+
+ succeeded in 0ms:
+"""Tier β.1 — host-side precompute API for the ESIM modified-value tables.
+
+Wraps the verified Tier 3 scaffold (tier3_esim_projector.py) into a
+single-shot precompute call that returns the per-irregular-cell
+master row vectors N_{I,J} as flat NumPy arrays ready for upload
+into Devito Function auxiliary storage (later Tier β.2-β.4).
+
+Per the Codex+Gemini dual-reviewer Q1 verdict (DISAGREE with host
+roundtrip per timestep), the eventual production path is:
+  precompute_esim_tables() returns N tables on the host
+  → upload to Devito Functions at setup time
+  → compiled Devito ESIM-fill Operator computes U*_{I,J}
+    inside the C-loop each timestep
+  → main RSG operator reads U_eff = U·(1-mask) + U_star·mask
+
+This module provides the FIRST step (host precompute), independent
+of the Devito storage choice. A simple Python-side apply function
+is included for end-to-end smoke verification BEFORE Devito
+integration; it's NOT the production hot path.
+"""
+from __future__ import annotations
+
+import sys
+import warnings
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'scripts'))
+
+from tier3_esim_projector import (
+    normal_and_tangent,
+    project_to_interface,
+    gather_disk_neighbours,
+    assemble_N_solid_side_general,
+    assemble_N_fluid_side_general,
+)
+from tier3_esim_recursion import flux_jacobians_isotropic
+from it_e_tier1_geometry import (
+    signed_distance_dipping_line,
+    rsg_diagonal_stencil_offsets,
+    identify_irregular_cells,
+)
+
+
+@dataclass
+class ESIMTables:
+    """Precomputed per-irregular-cell modified-value tables.
+
+    Per LP04 Eq 42, each irregular cell (i, j) on the SOLID side has
+    a master row vector N_{I,J} such that
+        U*_{I,J} = N · (U^n)_B
+    where (U^n)_B is the stacked vector of state values at the disk-B
+    neighbour cells around the orthogonal projection P of (i, j) onto Γ.
+
+    Layout:
+        target_ij      : (n_cells, 2) int  — (i, j) grid index of each
+                                              irregular cell
+        cell_side      : (n_cells,) int8   — +1 if cell ∈ Ω_1 (fluid),
+                                              -1 if cell ∈ Ω_2 (solid).
+                                              N at a fluid-side cell
+                                              produces SOLID-extension;
+                                              N at a solid-side cell
+                                              produces FLUID-extension.
+        P_xy           : (n_cells, 2) float — orthogonal projection
+                                              onto Γ
+        target_xy      : (n_cells, 2) float — physical (x, y)
+        B_ij           : list of (n_B, 2)  — per-cell disk-B grid
+                                              indices (ABSOLUTE i, j)
+        B_side         : list of (n_B,)    — +1 fluid, -1 solid per
+                                              B-cell (matches M's row
+                                              order: fluid first, solid
+                                              second)
+        N              : list of (5, n_eq) — master row vector per cell
+                                              (n_eq = 5 * n_B)
+        cond_M         : (n_cells,) float  — condition number per cell
+        k              : int                — projector order
+        state_components : int             — fixed at 5
+    """
+    target_ij: np.ndarray
+    cell_side: np.ndarray
+    P_xy: np.ndarray
+    target_xy: np.ndarray
+    B_ij: list[np.ndarray]
+    B_side: list[np.ndarray]
+    N: list[np.ndarray]
+    cond_M: np.ndarray
+    k: int
+    state_components: int = 5
+    # Dropped-cell bookkeeping (Codex+Gemini dual review 2026-05-27,
+    # /tmp/tier_beta_robustness_dual_review.txt). Cells skipped by the
+    # min-per-side filter are recorded here so a downstream caller can
+    # inspect whether the drops are causally relevant. Both reviewers
+    # AGREE: drops inside the Cerjan sponge band are acceptable for
+    # the Petrobras-config artifact removal; drops OUTSIDE the sponge
+    # band are not — they're flagged via RuntimeWarning at precompute
+    # time and surfaced here for inspection.
+    dropped_ij_in_sponge: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, 2), dtype=np.int32))
+    dropped_ij_out_sponge: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, 2), dtype=np.int32))
+
+    @property
+    def n_cells(self) -> int:
+        return len(self.B_ij)
+
+    @property
+    def n_dropped_in_sponge(self) -> int:
+        return len(self.dropped_ij_in_sponge)
+
+    @property
+    def n_dropped_out_sponge(self) -> int:
+        return len(self.dropped_ij_out_sponge)
+
+
+def precompute_esim_tables(
+    dip_deg: float,
+    dx: float,
+    Lx: float,
+    Ly: float,
+    anchor_x: float,
+    anchor_y: float,
+    k: int = 2,
+    q_factor: float = 3.5,
+    so: int = 8,
+    Vp_fluid: float = 1.5,
+    Vp_solid: float = 3.0,
+    Vs_solid: float = 1.5,
+    rho_fluid: float = 1.0,
+    rho_solid: float = 2.5,
+    state_components: int = 5,
+    max_cells: Optional[int] = None,
+    cerjan_width_cells: int = 40,
+    verbose: bool = False,
+) -> ESIMTables:
+    """Build per-irregular-cell ESIM tables for the dipping-line geometry.
+
+    Returns an `ESIMTables` instance with all per-cell data laid out
+    contiguously for fast iteration. The N row vectors are NOT
+    side-by-side flattened (per-cell n_B varies); for Devito storage
+    they'd need padding or sparse indexing — that decision is
+    deferred to β.2.
+    """
+    Nx = int(Lx / dx) + 1
+    Ny = int(Ly / dx) + 1
+    X = np.linspace(0, Lx, Nx)
+    Y = np.linspace(0, Ly, Ny)
+    XX, YY = np.meshgrid(X, Y, indexing='ij')
+    sdf = signed_distance_dipping_line(XX, YY, dip_deg, anchor_x, anchor_y)
+
+    stencil = rsg_diagonal_stencil_offsets(so)
+    irregular_mask, _ = identify_irregular_cells(sdf, stencil)
+    n_vec, t_vec = normal_and_tangent(dip_deg)
+    anchor_xy = np.array([anchor_x, anchor_y])
+
+    Vs_fluid_eff = max(Vs_solid * 1e-4, 1e-6)
+    A_fluid, B_fluid = flux_jacobians_isotropic(rho_fluid, Vp_fluid,
+                                                  Vs_fluid_eff)
+    A_solid, B_solid = flux_jacobians_isotropic(rho_solid, Vp_solid,
+                                                  Vs_solid)
+
+    target_ij_list = []
+    cell_side_list = []
+    target_xy_list = []
+    P_xy_list = []
+    B_ij_list = []
+    B_side_list = []
+    N_list = []
+    cond_M_list = []
+
+    # Dropped-cell tracking — dual-reviewer recommendation from
+    # 2026-05-27 robustness review. Each entry is (i, j).
+    dropped_in_sponge: list[tuple[int, int]] = []
+    dropped_out_sponge: list[tuple[int, int]] = []
+
+    n_attempted = 0
+    n_skipped = 0
+    n_failed = 0
+
+    for i in range(Nx):
+        for j in range(Ny):
+            if not irregular_mask[i, j]:
+                continue
+            if max_cells is not None and n_attempted >= max_cells:
+                break
+            n_attempted += 1
+            target_xy = np.array([X[i], Y[j]])
+            P_xy = project_to_interface(target_xy, dip_deg, anchor_xy)
+            B1, B2 = gather_disk_neighbours(
+                target_xy, P_xy, sdf, dx, q_factor=q_factor,
+                anchor_grid_xy=(0.0, 0.0))
+            # Robustness: drop cells with too few per-side neighbours.
+            # The over-determined SVD pseudoinverse becomes ill-
+            # conditioned (cond(M) > 1e10) when min(|B_1|, |B_2|) is
+            # below ~5; this happens at grid-edge cells where the
+            # interface has exited the domain. Such cells aren't truly
+            # "irregular in the LP04 sense" — they're domain-boundary
+            # artifacts of the SDF + RSG-stencil detection.
+            #
+            # Codex+Gemini dual review (2026-05-27,
+            # /tmp/tier_beta_robustness_dual_review.txt):
+            # both reviewers AGREE that the drop is acceptable IF the
+            # dropped cells fall inside the Cerjan absorbing-sponge
+            # band (where baseline artifacts are quickly absorbed).
+            # We classify the dropped cells below + warn if any drop
+            # falls OUTSIDE the sponge.
+            #
+            # Future-proofing note (deferred per Gemini Q3 DISAGREE on
+            # two-tier complexity vs Codex Q3 AGREE for reuse): the
+            # principled fix is local k-reduction (Alternative D) at
+            # deficient cells. Implement when a config triggers drops
+            # outside the sponge or when ESIM is needed at grid-edge
+            # boundaries (e.g., interfaces tangent to the grid).
+            min_per_side = 5
+            if len(B1) < min_per_side or len(B2) < min_per_side:
+                n_skipped += 1
+                # Classify by Cerjan-sponge proximity
+                in_sponge = (
+                    i < cerjan_width_cells
+                    or i >= Nx - cerjan_width_cells
+                    or j < cerjan_width_cells
+                    or j >= Ny - cerjan_width_cells
+                )
+                if in_sponge:
+                    dropped_in_sponge.append((i, j))
+                else:
+                    dropped_out_sponge.append((i, j))
+                continue
+            # Dispatch by cell side: cells in Ω_1 (fluid, sdf>0)
+            # produce SOLID-extension at fluid cells; cells in Ω_2
+            # (solid, sdf<0) produce FLUID-extension at solid cells.
+            if sdf[i, j] > 0:
+                cell_side = +1  # fluid
+                assemble_fn = assemble_N_fluid_side_general
+            else:
+                cell_side = -1  # solid
+                assemble_fn = assemble_N_solid_side_general
+            try:
+                N, cM, info = assemble_fn(
+                    B1, B2, sdf, dx, (0.0, 0.0), P_xy, t_vec,
+                    k=k, state_components=state_components,
+                    A_fluid=A_fluid, B_fluid=B_fluid,
+                    A_solid=A_solid, B_solid=B_solid,
+                    target_xy=target_xy)
+            except Exception:
+                n_failed += 1
+                continue
+            B_ij = np.array(B1 + B2, dtype=np.int32)
+            B_side = np.concatenate([
+                np.ones(len(B1), dtype=np.int8),
+                -np.ones(len(B2), dtype=np.int8),
+            ])
+            target_ij_list.append([i, j])
+            cell_side_list.append(cell_side)
+            target_xy_list.append(target_xy)
+            P_xy_list.append(P_xy)
+            B_ij_list.append(B_ij)
+
+exec
+/bin/zsh -lc "sed -n '1,260p' scripts/tier3_esim_storage.py" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+"""Tier β.3 — Devito-friendly storage layout for the ESIM tables.
+
+Converts the variable-length `ESIMTables` produced by β.1
+(precompute) into a padded fixed-stride NumPy-array bundle ready for
+upload into Devito `Function` storage in β.4. Per the n_B distribution
+measured at Petrobras production resolution (range [18, 41], median 39),
+the natural choice is padded fixed-stride at n_B_max = paper-tabulated
+ceiling.
+
+Layout (`PackedESIMTables`):
+  n_cells            : int                — total irregular cells
+  n_B_max            : int                — max disk-B size across cells
+  state_components   : int (5)            — fixed for elastic 2D
+  cell_target_ij     : (n_cells, 2) int32 — (i, j) of each cell
+  cell_side          : (n_cells,) int8    — +1 fluid, -1 solid
+  cell_n_B           : (n_cells,) int32   — actual |B| per cell
+  cell_B_ij          : (n_cells, n_B_max, 2) int32 — disk-B absolute
+                                              indices, padded with -1
+  cell_N             : (n_cells, 5, n_B_max, 5) float64 — master row
+                                              vector reshaped per
+                                              (output_comp, b_idx,
+                                              input_comp); padded with 0
+  cell_cond_M        : (n_cells,) float64 — diagnostic only
+
+Memory footprint at Petrobras production (11913 cells, n_B_max=41):
+  cell_N           = 11913 × 5 × 41 × 5 × 8 bytes ≈ 97.7 MB
+  cell_B_ij        = 11913 × 41 × 2 × 4 bytes    ≈ 3.9 MB
+  cell_target_ij   = 11913 × 2 × 4 bytes         ≈ 95 KB
+  Total            ≈ 102 MB (one-shot, host memory; trivial)
+
+This file does NOT depend on Devito. The β.4 Devito-integration step
+wraps `PackedESIMTables` arrays into actual Devito `Function`
+objects.
+"""
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'scripts'))
+
+from tier3_esim_precompute import ESIMTables
+
+
+@dataclass
+class PackedESIMTables:
+    """Fixed-stride, Devito-loadable ESIM tables.
+
+    Padding convention:
+      - cell_B_ij[c, b_idx, :] = (-1, -1) for b_idx >= cell_n_B[c]
+      - cell_N[c, :, b_idx, :] = zeros((5, 5)) for b_idx >= cell_n_B[c]
+      - Pad-zero in cell_N is mathematically equivalent to "no
+        contribution from this B-slot" since the dot product
+        N · (U^n)_B picks up that B-slot's contribution multiplied
+        by 0.
+
+    Applying U*_{cell c} = sum over b_idx of cell_N[c, :, b_idx, :]
+    contracted against the gathered (U^n)_B at the (i,j) given by
+    cell_B_ij[c, b_idx, :]. Out-of-bounds (-1) entries should be
+    masked (and they ARE auto-masked by the zero-coefficient padding).
+    """
+    n_cells: int
+    n_B_max: int
+    state_components: int
+    cell_target_ij: np.ndarray   # (n_cells, 2) int32
+    cell_side: np.ndarray         # (n_cells,) int8
+    cell_n_B: np.ndarray          # (n_cells,) int32
+    cell_B_ij: np.ndarray         # (n_cells, n_B_max, 2) int32
+    cell_N: np.ndarray            # (n_cells, sc, n_B_max, sc) float64
+    cell_cond_M: np.ndarray       # (n_cells,) float64
+    k: int
+
+    @property
+    def memory_mb(self) -> float:
+        total = (self.cell_N.nbytes + self.cell_B_ij.nbytes
+                 + self.cell_target_ij.nbytes + self.cell_side.nbytes
+                 + self.cell_n_B.nbytes + self.cell_cond_M.nbytes)
+        return total / 1e6
+
+
+def pack_esim_tables(tables: ESIMTables,
+                       n_B_max: int | None = None,
+                       ) -> PackedESIMTables:
+    """Convert variable-length `ESIMTables` to padded fixed-stride
+    `PackedESIMTables`. If n_B_max is None, use the actual max from
+    the input tables."""
+    if n_B_max is None:
+        n_B_max = max(len(b) for b in tables.B_ij)
+    sc = tables.state_components
+    n_cells = tables.n_cells
+
+    cell_target_ij = tables.target_ij.copy()
+    cell_side = tables.cell_side.copy()
+    cell_n_B = np.array([len(b) for b in tables.B_ij], dtype=np.int32)
+    cell_B_ij = np.full((n_cells, n_B_max, 2), -1, dtype=np.int32)
+    cell_N = np.zeros((n_cells, sc, n_B_max, sc), dtype=np.float64)
+
+    for c in range(n_cells):
+        nB = len(tables.B_ij[c])
+        cell_B_ij[c, :nB, :] = tables.B_ij[c]
+        # Reshape N from (sc, sc * n_B) to (sc, n_B, sc):
+        # N's column ordering matches gather_UB: (b_0_comp_0, b_0_comp_1,
+        # ..., b_0_comp_4, b_1_comp_0, ..., b_(n_B-1)_comp_4).
+        # So column index k = b_idx * sc + comp_in.
+        N_reshaped = tables.N[c].reshape(sc, nB, sc)
+        cell_N[c, :, :nB, :] = N_reshaped
+
+    return PackedESIMTables(
+        n_cells=n_cells,
+        n_B_max=int(n_B_max),
+        state_components=sc,
+        cell_target_ij=cell_target_ij,
+        cell_side=cell_side,
+        cell_n_B=cell_n_B,
+        cell_B_ij=cell_B_ij,
+        cell_N=cell_N,
+        cell_cond_M=tables.cond_M.copy(),
+        k=tables.k,
+    )
+
+
+def apply_packed_python(packed: PackedESIMTables,
+                          field: np.ndarray,
+                          U_star: np.ndarray | None = None,
+                          ) -> np.ndarray:
+    """Apply the packed ESIM tables via a host-side Python loop.
+
+    Equivalent to `apply_esim_python` from precompute, but operating on
+    the padded fixed-stride layout. Used to verify the packing is
+    lossless before β.4.
+    """
+    if U_star is None:
+        U_star = np.zeros_like(field)
+    sc = packed.state_components
+    for c in range(packed.n_cells):
+        i, j = packed.cell_target_ij[c]
+        nB = packed.cell_n_B[c]
+        # Gather (U^n)_B in cell_N's expected order
+        UB = np.empty(sc * nB)
+        for b_idx in range(nB):
+            ib, jb = packed.cell_B_ij[c, b_idx]
+            UB[b_idx * sc : (b_idx + 1) * sc] = field[:, ib, jb]
+        # N_flat shape (sc, sc * nB): keep the unpadded slice
+        N_flat = packed.cell_N[c, :, :nB, :].reshape(sc, sc * nB)
+        U_star[:, i, j] = N_flat @ UB
+    return U_star
+
+
+def apply_packed_einsum(packed: PackedESIMTables,
+                         field: np.ndarray,
+                         U_star: np.ndarray | None = None,
+                         ) -> np.ndarray:
+    """Vectorised apply using NumPy fancy-indexing + einsum.
+
+    Faster than the Python loop variant. Used as a reference for the
+    eventual Devito-compiled equivalent in β.4 — also demonstrates the
+    sparse-gather pattern Devito will need to express symbolically.
+    """
+    if U_star is None:
+        U_star = np.zeros_like(field)
+    sc = packed.state_components
+    n_cells = packed.n_cells
+    n_B_max = packed.n_B_max
+
+    # Fancy-index gather: B_field[c, b, comp] = field[comp, cell_B_ij[c, b, 0],
+    #                                                   cell_B_ij[c, b, 1]]
+    # Replace -1 entries with index 0 for the gather; we'll mask via
+    # cell_N padding (zeros at unused b-slots).
+    safe_B_ij = np.where(packed.cell_B_ij == -1, 0, packed.cell_B_ij)
+    bi = safe_B_ij[:, :, 0]  # (n_cells, n_B_max)
+    bj = safe_B_ij[:, :, 1]
+    # B_field shape: (sc, n_cells, n_B_max). Use np.take over the
+    # spatial dims via advanced indexing:
+    B_field_per_comp = np.empty((sc, n_cells, n_B_max), dtype=field.dtype)
+    for comp in range(sc):
+        B_field_per_comp[comp] = field[comp, bi, bj]
+    # Transpose to (n_cells, n_B_max, sc) so einsum aligns:
+    B_field = B_field_per_comp.transpose(1, 2, 0)
+    # Mask invalid slots: cell_N has zeros there, so the contribution
+    # is zero regardless of B_field's value. No explicit mask needed.
+
+    # U*[c, comp_out] = sum over (b_idx, comp_in) of
+    #     cell_N[c, comp_out, b_idx, comp_in] * B_field[c, b_idx, comp_in]
+    U_star_per_cell = np.einsum('cobi,cbi->co', packed.cell_N, B_field)
+    # Scatter into U_star
+    ci = packed.cell_target_ij[:, 0]
+    cj = packed.cell_target_ij[:, 1]
+    for comp in range(sc):
+        U_star[comp, ci, cj] = U_star_per_cell[:, comp]
+    return U_star
+
+
+def main_smoke():
+    """Verify the packing → apply pipeline matches the unpacked
+    `apply_esim_python` from β.1 to fp64."""
+    import time
+
+    from tier3_esim_precompute import (
+        precompute_esim_tables,
+        apply_esim_python,
+    )
+
+    print("=" * 70)
+    print("Tier β.3 — packed-storage smoke verification")
+    print("=" * 70)
+
+    t0 = time.time()
+    tables = precompute_esim_tables(
+        dip_deg=30.0, dx=0.005, Lx=6.0, Ly=4.30,
+        anchor_x=3.0, anchor_y=1.0, k=2,
+        Vp_fluid=1.5, Vp_solid=3.0, Vs_solid=1.5,
+        rho_fluid=1.0, rho_solid=2.5,
+        verbose=True,
+    )
+    print(f"  Precompute:    {time.time() - t0:.2f}s")
+
+    t0 = time.time()
+    packed = pack_esim_tables(tables)
+    t_pack = time.time() - t0
+    print(f"  Pack:          {t_pack:.2f}s")
+    print(f"  n_B_max:       {packed.n_B_max}")
+    print(f"  Memory:        {packed.memory_mb:.1f} MB")
+
+    # Build a plane-wave field for non-trivial verification
+    from tier3_esim_projector import normal_and_tangent
+    _, t_vec = normal_and_tangent(30.0)
+    kappa = 2.0 * np.pi / 0.5
+    kx, ky = kappa * t_vec
+    Nx = int(6.0 / 0.005) + 1
+    Ny = int(4.30 / 0.005) + 1
+    X = np.linspace(0, 6.0, Nx)
+    Y = np.linspace(0, 4.30, Ny)
+    XX, YY = np.meshgrid(X, Y, indexing='ij')
+    p = np.cos(kx * (XX - 3.0) + ky * (YY - 1.0))
+    field = np.zeros((5, Nx, Ny))
+    field[2] = -p
+    field[4] = -p
+
+    # Apply via unpacked + packed paths
+    t0 = time.time()
+    U_star_unpacked = apply_esim_python(tables, field)
+    t_unpack = time.time() - t0
+
+    t0 = time.time()
+    U_star_packed = apply_packed_python(packed, field)
+    t_packed_loop = time.time() - t0
+
+    t0 = time.time()
+    U_star_einsum = apply_packed_einsum(packed, field)
+    t_packed_einsum = time.time() - t0
+
+    # Compare to fp64 noise — packing must be lossless
+    diff_loop = np.max(np.abs(U_star_unpacked - U_star_packed))
+    diff_einsum = np.max(np.abs(U_star_unpacked - U_star_einsum))
+    print(f"\n  Apply timings:")
+    print(f"    apply_esim_python (unpacked):    {t_unpack:.3f}s")
+
+exec
+/bin/zsh -lc 'rg -n "pinv|lstsq|cond|rcond|rank|svd|same|side|cross|offset" scripts/tier3_esim_*.py' in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+scripts/tier3_esim_devito_proto_scale.py:3:The minimal prototype passed at 5 offsets / 1 state / 3 cells.
+scripts/tier3_esim_devito_proto_scale.py:5:  - 41 offsets (Petrobras n_B_max)
+scripts/tier3_esim_devito_proto_scale.py:27:    print("β.4.1 SCALE — 41 offsets × 5×5 components × 100 cells")
+scripts/tier3_esim_devito_proto_scale.py:35:    n_offsets = 41
+scripts/tier3_esim_devito_proto_scale.py:38:    # Random valid (ti, tj) positions, ensuring offsets stay in bounds
+scripts/tier3_esim_devito_proto_scale.py:39:    margin = 5  # max offset radius
+scripts/tier3_esim_devito_proto_scale.py:44:    # Synthetic offset alphabet: cells in a disk of radius 4 within the
+scripts/tier3_esim_devito_proto_scale.py:48:    offsets = candidates[:n_offsets]
+scripts/tier3_esim_devito_proto_scale.py:49:    dx_off_data = np.array([o[0] for o in offsets], dtype=np.int32)
+scripts/tier3_esim_devito_proto_scale.py:50:    dy_off_data = np.array([o[1] for o in offsets], dtype=np.int32)
+scripts/tier3_esim_devito_proto_scale.py:54:        (n_cells, n_state, n_state, n_offsets)).astype(np.float64) * 0.1
+scripts/tier3_esim_devito_proto_scale.py:71:                for off in range(n_offsets):
+scripts/tier3_esim_devito_proto_scale.py:96:                  shape=(n_cells, n_state, n_state, n_offsets),
+scripts/tier3_esim_devito_proto_scale.py:112:            for off in range(n_offsets):
+scripts/tier3_esim_devito_proto_scale.py:124:          f"({len(eqs)} eqs × {n_state * n_offsets} terms each)")
+scripts/tier3_esim_static_test.py:3:For a polynomial field of degree ≤ k on each side that satisfies the
+scripts/tier3_esim_static_test.py:4:LP04 jump conditions, U* should match the across-Γ analytical
+scripts/tier3_esim_static_test.py:29:    assemble_N_solid_side_general,
+scripts/tier3_esim_static_test.py:37:    rsg_diagonal_stencil_offsets,
+scripts/tier3_esim_static_test.py:45:    """Constant-stress isotropic field. Trivially satisfies jump conds."""
+scripts/tier3_esim_static_test.py:57:    """Plane wave field on both sides (homogeneous medium for the static
+scripts/tier3_esim_static_test.py:58:    test → jump conditions trivially satisfied).
+scripts/tier3_esim_static_test.py:87:    Both sides identical → jump conditions satisfied.
+scripts/tier3_esim_static_test.py:96:    return field_fluid, field_fluid  # same generator on both sides
+scripts/tier3_esim_static_test.py:101:    """Linear field varying along the tangent direction. Constant across
+scripts/tier3_esim_static_test.py:102:    Γ ⇒ jump conditions still hold (no normal-direction variation).
+scripts/tier3_esim_static_test.py:127:    """Build the (5, Nx, Ny) field array given side-specific generators."""
+scripts/tier3_esim_static_test.py:172:    stencil = rsg_diagonal_stencil_offsets(so)
+scripts/tier3_esim_static_test.py:211:    cond_numbers = []
+scripts/tier3_esim_static_test.py:213:    skipped_per_side = 0
+scripts/tier3_esim_static_test.py:221:                continue  # solid-side only
+scripts/tier3_esim_static_test.py:230:                skipped_per_side += 1
+scripts/tier3_esim_static_test.py:233:                N, cM, info = assemble_N_solid_side_general(
+scripts/tier3_esim_static_test.py:244:            # Analytical extension: the field on the FLUID side at the
+scripts/tier3_esim_static_test.py:246:            # there). Since both sides have the same analytic formula
+scripts/tier3_esim_static_test.py:251:            cond_numbers.append(cM)
+scripts/tier3_esim_static_test.py:257:    cond_numbers = np.array(cond_numbers)
+scripts/tier3_esim_static_test.py:259:        print(f"\nSolid-side irregular cells tested:    {len(residuals)}")
+scripts/tier3_esim_static_test.py:260:        print(f"Skipped (empty B_1 or B_2):           {skipped_per_side}")
+scripts/tier3_esim_static_test.py:266:            print(f"cond(M)                max:            {cond_numbers.max():.3e}")
+scripts/tier3_esim_static_test.py:267:            print(f"                       median:         {np.median(cond_numbers):.3e}")
+scripts/tier3_esim_static_test.py:275:        'cond_numbers': cond_numbers,
+scripts/tier3_esim_static_test.py:278:        'skipped_per_side': skipped_per_side,
+scripts/tier3_esim_projector.py:6:(constant normal/tangent along Γ). This is the host-side precompute
+scripts/tier3_esim_projector.py:17:  - Fluid-as-degenerate-solid: both sides modelled with the 5-
+scripts/tier3_esim_projector.py:20:    side 3-component (v_1, v_2, p) state is recovered by collapsing
+scripts/tier3_esim_projector.py:22:    both sides 5-component, which is what the actual RSG operator
+scripts/tier3_esim_projector.py:37:from numpy.linalg import lstsq, svd, cond, pinv
+scripts/tier3_esim_projector.py:45:    rsg_diagonal_stencil_offsets,
+scripts/tier3_esim_projector.py:50:    pi_row_at_offset,
+scripts/tier3_esim_projector.py:95:        B_1 : list of (i, j) grid indices on the fluid side (sdf > 0)
+scripts/tier3_esim_projector.py:96:        B_2 : list of (i, j) grid indices on the solid side (sdf < 0)
+scripts/tier3_esim_projector.py:133:    """LP04 Eq 11: fluid-side 2×3 jump matrix at order 0, evaluated for
+scripts/tier3_esim_projector.py:143:    """LP04 Eq 11: solid-side 2×5 jump matrix at order 0.
+scripts/tier3_esim_projector.py:157:    """LP04 Eq 11: fluid-side 1×3 boundary-condition row (empty for
+scripts/tier3_esim_projector.py:165:    """LP04 Eq 11: solid-side 1×5 row — vanishing tangential shear
+scripts/tier3_esim_projector.py:182:def build_K_via_svd(L: np.ndarray, G: np.ndarray) -> np.ndarray:
+scripts/tier3_esim_projector.py:191:    U, s, Vt = svd(LG, full_matrices=True)
+scripts/tier3_esim_projector.py:194:    rank = int((s > tol).sum())
+scripts/tier3_esim_projector.py:195:    K = Vt[rank:, :].T  # nullspace columns
+scripts/tier3_esim_projector.py:209:    side: int                # 1 (fluid) or 2 (solid)
+scripts/tier3_esim_projector.py:211:    M_cond: float            # condition number of the over-determined M
+scripts/tier3_esim_projector.py:212:    target_state_dim: int    # dimension of U* (3 for fluid side, 5 for solid)
+scripts/tier3_esim_projector.py:246:    C_jump_0 = C2_zero_numeric(t)  # 2×5 generic jump-condition
+scripts/tier3_esim_projector.py:268:    # redundancy (cond(M) blows up to 1e19+ without this).
+scripts/tier3_esim_projector.py:279:    K_1 = build_K_via_svd(L_1, G_1)
+scripts/tier3_esim_projector.py:280:    K_2 = build_K_via_svd(L_2, G_2)
+scripts/tier3_esim_projector.py:286:    U_s2, sig_s2, Vt_s2 = svd(S_2, full_matrices=True)
+scripts/tier3_esim_projector.py:288:    rank_s2 = int((sig_s2 > tol_s2).sum())
+scripts/tier3_esim_projector.py:289:    S_2_pinv = pinv(S_2)
+scripts/tier3_esim_projector.py:290:    R_S2 = Vt_s2[rank_s2:, :].T
+scripts/tier3_esim_projector.py:293:    A_W1 = S_2_pinv @ S_1
+scripts/tier3_esim_projector.py:326:            pi_scalar = _pi_scalar_at_offset(dxo, dyo, k)
+scripts/tier3_esim_projector.py:339:            pi_scalar = _pi_scalar_at_offset(dxo, dyo, k)
+scripts/tier3_esim_projector.py:349:        'S_1': S_1, 'S_2': S_2, 'S_2_pinv': S_2_pinv, 'R_S2': R_S2,
+scripts/tier3_esim_projector.py:358:def _pi_scalar_at_offset(dxo: float, dyo: float, k: int) -> np.ndarray:
+scripts/tier3_esim_projector.py:359:    """Recursive Taylor weights (3^k entries) at offset (dxo, dyo)."""
+scripts/tier3_esim_projector.py:376:    Π_block · U_k_vector = U^0 at the offset point (component-by-component).
+scripts/tier3_esim_projector.py:401:    jump-condition coupling Eq 31 to express U_2 in terms of U_1.
+scripts/tier3_esim_projector.py:418:    # Solid side has the L_2 tangential-shear constraint:
+scripts/tier3_esim_projector.py:420:    K_2 = build_K_via_svd(L_2, G_2)  # spans tangential-shear nullspace
+scripts/tier3_esim_projector.py:425:    # Jump conditions at k=0: C_1 · G_1 · V_1 = C_2 · G_2 · V_2
+scripts/tier3_esim_projector.py:426:    # (Eq 27, here for degenerate-solid fluid using C_2 on both sides):
+scripts/tier3_esim_projector.py:427:    # We use C_2_zero on both sides since both are 5-component.
+scripts/tier3_esim_projector.py:428:    # The jump conditions ARE LP04 Eq 10: [v·n] = 0, -p n = σ n,
+scripts/tier3_esim_projector.py:430:    C_jump = C2_zero_numeric(t)  # 2×5 — generic jump-condition rows
+scripts/tier3_esim_projector.py:437:    # W_2 = pinv(S_2) · S_1 · W_1 + R_{S_2} · Λ
+scripts/tier3_esim_projector.py:439:    U_s2, sig_s2, Vt_s2 = svd(S_2, full_matrices=True)
+scripts/tier3_esim_projector.py:441:    rank_s2 = int((sig_s2 > tol_s2).sum())
+scripts/tier3_esim_projector.py:442:    S_2_pinv = pinv(S_2)
+scripts/tier3_esim_projector.py:443:    R_S2 = Vt_s2[rank_s2:, :].T  # nullspace columns of S_2 — shape (n_w2, n_lambda)
+scripts/tier3_esim_projector.py:447:    # i.e. W_2 = S_2_pinv @ S_1 @ W_1 + R_S2 @ Λ
+scripts/tier3_esim_projector.py:452:    A_W1 = S_2_pinv @ S_1            # (n_w2, n_w1)
+scripts/tier3_esim_projector.py:490:        'S_1': S_1, 'S_2': S_2, 'S_2_pinv': S_2_pinv, 'R_S2': R_S2,
+scripts/tier3_esim_projector.py:498:def assemble_N_k0_solid_side(B1: list[tuple[int, int]],
+scripts/tier3_esim_projector.py:507:    """For an irregular cell on the SOLID side (sdf < 0): compute the
+scripts/tier3_esim_projector.py:509:    the fluid-side state (extended across Γ) at the cell.
+scripts/tier3_esim_projector.py:517:        cond_M : condition number of M.
+scripts/tier3_esim_projector.py:524:    M_pinv = pinv(M)
+scripts/tier3_esim_projector.py:525:    Mbar_inv = M_pinv[:info['n_w1'], :]  # (n_w1, n_eq)
+scripts/tier3_esim_projector.py:531:    cond_M = cond(M)
+scripts/tier3_esim_projector.py:532:    return N, cond_M, info
+scripts/tier3_esim_projector.py:535:def assemble_N_fluid_side_general(B1, B2, sdf, dx, anchor_grid_xy,
+scripts/tier3_esim_projector.py:542:    """Master row vector N for a FLUID-side (Ω_1) irregular cell.
+scripts/tier3_esim_projector.py:544:    Per LP04 Eq 42 with the side-swap noted by the paper: for an
+scripts/tier3_esim_projector.py:550:    Mbar-pinv (not just the W_1 row block) to recover both W_1
+scripts/tier3_esim_projector.py:556:    M_pinv = pinv(M)
+scripts/tier3_esim_projector.py:558:    # W_2 = (A_W1 | A_lambda) · M_pinv · (U^n)_B
+scripts/tier3_esim_projector.py:560:    W1_from_UB = M_pinv[:n_w1, :]                # (n_w1, n_eq)
+scripts/tier3_esim_projector.py:561:    Lambda_from_UB = M_pinv[n_w1:, :]            # (n_lambda, n_eq)
+scripts/tier3_esim_projector.py:576:        pi_scalar = _pi_scalar_at_offset(dxo, dyo, k)
+scripts/tier3_esim_projector.py:579:    cond_M = cond(M)
+scripts/tier3_esim_projector.py:580:    return N, cond_M, info
+scripts/tier3_esim_projector.py:583:def assemble_N_solid_side_general(B1, B2, sdf, dx, anchor_grid_xy,
+scripts/tier3_esim_projector.py:590:    """General-order projector N: U*_{I,J} = N · (U^n)_B at a solid-side
+scripts/tier3_esim_projector.py:593:    The Π row vector is evaluated at offset (target_xy - P_xy) to give
+scripts/tier3_esim_projector.py:594:    the across-Γ extension AT THE TARGET CELL.
+scripts/tier3_esim_projector.py:599:    M_pinv = pinv(M)
+scripts/tier3_esim_projector.py:600:    Mbar_inv = M_pinv[:info['n_w1'], :]  # n_w1 rows
+scripts/tier3_esim_projector.py:603:    # Π evaluated at target_xy offset:
+scripts/tier3_esim_projector.py:613:        pi_scalar = _pi_scalar_at_offset(dxo, dyo, k)
+scripts/tier3_esim_projector.py:617:    cond_M = cond(M)
+scripts/tier3_esim_projector.py:618:    return N, cond_M, info
+scripts/tier3_esim_precompute.py:1:"""Tier β.1 — host-side precompute API for the ESIM modified-value tables.
+scripts/tier3_esim_precompute.py:13:    inside the C-loop each timestep
+scripts/tier3_esim_precompute.py:17:of the Devito storage choice. A simple Python-side apply function
+scripts/tier3_esim_precompute.py:38:    assemble_N_solid_side_general,
+scripts/tier3_esim_precompute.py:39:    assemble_N_fluid_side_general,
+scripts/tier3_esim_precompute.py:44:    rsg_diagonal_stencil_offsets,
+scripts/tier3_esim_precompute.py:53:    Per LP04 Eq 42, each irregular cell (i, j) on the SOLID side has
+scripts/tier3_esim_precompute.py:62:        cell_side      : (n_cells,) int8   — +1 if cell ∈ Ω_1 (fluid),
+scripts/tier3_esim_precompute.py:64:                                              N at a fluid-side cell
+scripts/tier3_esim_precompute.py:66:                                              N at a solid-side cell
+scripts/tier3_esim_precompute.py:73:        B_side         : list of (n_B,)    — +1 fluid, -1 solid per
+scripts/tier3_esim_precompute.py:76:                                              second)
+scripts/tier3_esim_precompute.py:79:        cond_M         : (n_cells,) float  — condition number per cell
+scripts/tier3_esim_precompute.py:84:    cell_side: np.ndarray
+scripts/tier3_esim_precompute.py:88:    B_side: list[np.ndarray]
+scripts/tier3_esim_precompute.py:90:    cond_M: np.ndarray
+scripts/tier3_esim_precompute.py:95:    # min-per-side filter are recorded here so a downstream caller can
+scripts/tier3_esim_precompute.py:97:    # AGREE: drops inside the Cerjan sponge band are acceptable for
+scripts/tier3_esim_precompute.py:143:    side-by-side flattened (per-cell n_B varies); for Devito storage
+scripts/tier3_esim_precompute.py:154:    stencil = rsg_diagonal_stencil_offsets(so)
+scripts/tier3_esim_precompute.py:166:    cell_side_list = []
+scripts/tier3_esim_precompute.py:170:    B_side_list = []
+scripts/tier3_esim_precompute.py:172:    cond_M_list = []
+scripts/tier3_esim_precompute.py:195:            # Robustness: drop cells with too few per-side neighbours.
+scripts/tier3_esim_precompute.py:197:            # conditioned (cond(M) > 1e10) when min(|B_1|, |B_2|) is
+scripts/tier3_esim_precompute.py:206:            # dropped cells fall inside the Cerjan absorbing-sponge
+scripts/tier3_esim_precompute.py:215:            # outside the sponge or when ESIM is needed at grid-edge
+scripts/tier3_esim_precompute.py:217:            min_per_side = 5
+scripts/tier3_esim_precompute.py:218:            if len(B1) < min_per_side or len(B2) < min_per_side:
+scripts/tier3_esim_precompute.py:232:            # Dispatch by cell side: cells in Ω_1 (fluid, sdf>0)
+scripts/tier3_esim_precompute.py:236:                cell_side = +1  # fluid
+scripts/tier3_esim_precompute.py:237:                assemble_fn = assemble_N_fluid_side_general
+scripts/tier3_esim_precompute.py:239:                cell_side = -1  # solid
+scripts/tier3_esim_precompute.py:240:                assemble_fn = assemble_N_solid_side_general
+scripts/tier3_esim_precompute.py:252:            B_side = np.concatenate([
+scripts/tier3_esim_precompute.py:257:            cell_side_list.append(cell_side)
+scripts/tier3_esim_precompute.py:261:            B_side_list.append(B_side)
+scripts/tier3_esim_precompute.py:263:            cond_M_list.append(cM)
+scripts/tier3_esim_precompute.py:267:    # Emit a RuntimeWarning if any drop falls outside the sponge —
+scripts/tier3_esim_precompute.py:278:            f"{dropped_out_sponge[:5]}. Consider implementing local "
+scripts/tier3_esim_precompute.py:286:        n_fluid = sum(1 for s in cell_side_list if s > 0)
+scripts/tier3_esim_precompute.py:287:        n_solid = sum(1 for s in cell_side_list if s < 0)
+scripts/tier3_esim_precompute.py:289:              f"(fluid-side: {n_fluid}, solid-side: {n_solid}; "
+scripts/tier3_esim_precompute.py:299:        cell_side=np.array(cell_side_list, dtype=np.int8),
+scripts/tier3_esim_precompute.py:303:        B_side=B_side_list,
+scripts/tier3_esim_precompute.py:305:        cond_M=np.array(cond_M_list, dtype=np.float64),
+scripts/tier3_esim_precompute.py:323:    host-side Python loop. Used for SMOKE VERIFICATION; not the
+scripts/tier3_esim_storage.py:12:  n_B_max            : int                — max disk-B size across cells
+scripts/tier3_esim_storage.py:15:  cell_side          : (n_cells,) int8    — +1 fluid, -1 solid
+scripts/tier3_esim_storage.py:23:  cell_cond_M        : (n_cells,) float64 — diagnostic only
+scripts/tier3_esim_storage.py:70:    cell_side: np.ndarray         # (n_cells,) int8
+scripts/tier3_esim_storage.py:74:    cell_cond_M: np.ndarray       # (n_cells,) float64
+scripts/tier3_esim_storage.py:80:                 + self.cell_target_ij.nbytes + self.cell_side.nbytes
+scripts/tier3_esim_storage.py:81:                 + self.cell_n_B.nbytes + self.cell_cond_M.nbytes)
+scripts/tier3_esim_storage.py:97:    cell_side = tables.cell_side.copy()
+scripts/tier3_esim_storage.py:117:        cell_side=cell_side,
+scripts/tier3_esim_storage.py:121:        cell_cond_M=tables.cond_M.copy(),
+scripts/tier3_esim_storage.py:130:    """Apply the packed ESIM tables via a host-side Python loop.
+scripts/tier3_esim_devito_proto_minimal.py:22:  2. Build a simple 4-offset stencil (±1 in each direction).
+scripts/tier3_esim_devito_proto_minimal.py:23:  3. Hand-set N_coeffs to a simple pattern (e.g., 0.25 at each offset).
+scripts/tier3_esim_devito_proto_minimal.py:54:    # 3 hand-picked irregular cells (avoiding grid edges to keep ±1 offsets valid)
+scripts/tier3_esim_devito_proto_minimal.py:56:    n_offsets = 5  # centre + 4 cardinal neighbours
+scripts/tier3_esim_devito_proto_minimal.py:65:    N_coeffs_data = np.zeros((n_cells, n_state, n_state, n_offsets))
+scripts/tier3_esim_devito_proto_minimal.py:80:        for off in range(n_offsets):
+scripts/tier3_esim_devito_proto_minimal.py:90:        off_id = CustomDimension('off_id', 0, n_offsets)
+scripts/tier3_esim_devito_proto_minimal.py:97:        di = Function(name='di', dimensions=(off_id,), shape=(n_offsets,),
+scripts/tier3_esim_devito_proto_minimal.py:99:        dj = Function(name='dj', dimensions=(off_id,), shape=(n_offsets,),
+scripts/tier3_esim_devito_proto_minimal.py:107:        # For the literal-offset approach: store as (cell_id, off_const_dim)
+scripts/tier3_esim_devito_proto_minimal.py:114:                              shape=(n_cells, n_offsets),
+scripts/tier3_esim_devito_proto_minimal.py:139:    # ATTEMPT 2: Enumerate off_idx in Python (literal offsets), keep
+scripts/tier3_esim_devito_proto_minimal.py:141:    # a separate read of U at a literal offset from ti[cell_id], tj[cell_id].
+scripts/tier3_esim_devito_proto_minimal.py:144:        for off in range(n_offsets):
+scripts/tier3_esim_devito_proto_minimal.py:152:        print(f"  Eq built (literal-offset enumeration; {n_offsets} terms)")
+scripts/tier3_esim_devito_apply.py:18:  with cell_N indexed by per-cell slot b_idx (variable across cells).
+scripts/tier3_esim_devito_apply.py:19:  Devito needs a UNIFORM offset alphabet across cells — so we:
+scripts/tier3_esim_devito_apply.py:21:  1. Compute relative offsets per cell: (B_i, B_j) - (target_i, target_j)
+scripts/tier3_esim_devito_apply.py:22:  2. Build the union of all distinct offsets → the alphabet
+scripts/tier3_esim_devito_apply.py:24:     zeros where a cell doesn't use that offset.
+scripts/tier3_esim_devito_apply.py:33:At full Petrobras dip=30° (11,913 cells), the offset alphabet is
+scripts/tier3_esim_devito_apply.py:34:~115 distinct offsets (not the ~41 used in β.4.1's hand-picked
+scripts/tier3_esim_devito_apply.py:36:has offsets RELATIVE TO THE TARGET CELL M, and the (cell M to P)
+scripts/tier3_esim_devito_apply.py:38:offsets across all cells is much wider than a single disk's
+scripts/tier3_esim_devito_apply.py:47:(41 offsets → 0.64ms apply). The β.4.2 implementation here IS
+scripts/tier3_esim_devito_apply.py:56:    ~40-50 offsets (single-disk membership). Requires refactoring
+scripts/tier3_esim_devito_apply.py:58:    cell-to-P_grid offset separately.
+scripts/tier3_esim_devito_apply.py:105:    Operator can be reused across timesteps (just rebind U field data
+scripts/tier3_esim_devito_apply.py:110:    n_offsets: int
+scripts/tier3_esim_devito_apply.py:112:    offset_alphabet: np.ndarray    # (n_offsets, 2) int32 — (di, dj)
+scripts/tier3_esim_devito_apply.py:124:        Returns U_star_sub data of shape (n_cells, 5) — same layout
+scripts/tier3_esim_devito_apply.py:134:def _compute_offset_alphabet(packed: PackedESIMTables
+scripts/tier3_esim_devito_apply.py:136:    """Compute the union of relative offsets across all cells and the
+scripts/tier3_esim_devito_apply.py:140:        offset_alphabet : (n_offsets, 2) int32 — (di, dj) per off_idx
+scripts/tier3_esim_devito_apply.py:147:    # Per-cell relative offsets
+scripts/tier3_esim_devito_apply.py:149:    rel_offsets = packed.cell_B_ij - packed.cell_target_ij[:, np.newaxis, :]
+scripts/tier3_esim_devito_apply.py:155:    valid_offsets = rel_offsets[valid_mask]                # (M, 2)
+scripts/tier3_esim_devito_apply.py:157:    offset_set = set(map(tuple, valid_offsets.tolist()))
+scripts/tier3_esim_devito_apply.py:158:    sorted_offsets = sorted(offset_set, key=lambda d: (d[0], d[1]))
+scripts/tier3_esim_devito_apply.py:159:    offset_alphabet = np.array(sorted_offsets, dtype=np.int32)
+scripts/tier3_esim_devito_apply.py:160:    offset_lookup = {tuple(o.tolist()): k for k, o in enumerate(offset_alphabet)}
+scripts/tier3_esim_devito_apply.py:168:            key = (int(rel_offsets[c, b, 0]), int(rel_offsets[c, b, 1]))
+scripts/tier3_esim_devito_apply.py:169:            slot_to_off_idx[c, b] = offset_lookup[key]
+scripts/tier3_esim_devito_apply.py:171:    return offset_alphabet, slot_to_off_idx
+scripts/tier3_esim_devito_apply.py:175:                          offset_alphabet: np.ndarray,
+scripts/tier3_esim_devito_apply.py:181:    n_offsets = len(offset_alphabet)
+scripts/tier3_esim_devito_apply.py:183:    N_repacked = np.zeros((n_cells, sc, sc, n_offsets), dtype=np.float64)
+scripts/tier3_esim_devito_apply.py:207:    # 1. Compute offset alphabet
+scripts/tier3_esim_devito_apply.py:209:        print("Computing offset alphabet...")
+scripts/tier3_esim_devito_apply.py:211:    offset_alphabet, slot_to_off_idx = _compute_offset_alphabet(packed)
+scripts/tier3_esim_devito_apply.py:212:    n_offsets = len(offset_alphabet)
+scripts/tier3_esim_devito_apply.py:214:        print(f"  Alphabet size: {n_offsets} distinct offsets "
+scripts/tier3_esim_devito_apply.py:216:        print(f"  Offset range: di ∈ [{offset_alphabet[:, 0].min()}, "
+scripts/tier3_esim_devito_apply.py:217:              f"{offset_alphabet[:, 0].max()}], "
+scripts/tier3_esim_devito_apply.py:218:              f"dj ∈ [{offset_alphabet[:, 1].min()}, "
+scripts/tier3_esim_devito_apply.py:219:              f"{offset_alphabet[:, 1].max()}]")
+scripts/tier3_esim_devito_apply.py:226:    N_repacked = _repack_coefficients(packed, offset_alphabet, slot_to_off_idx)
+scripts/tier3_esim_devito_apply.py:249:                  shape=(packed.n_cells, sc, sc, n_offsets),
+scripts/tier3_esim_devito_apply.py:271:            for off in range(n_offsets):
+scripts/tier3_esim_devito_apply.py:272:                di_val = int(offset_alphabet[off, 0])
+scripts/tier3_esim_devito_apply.py:273:                dj_val = int(offset_alphabet[off, 1])
+scripts/tier3_esim_devito_apply.py:283:              f"({sc} eqs × {sc * n_offsets} terms each)")
+scripts/tier3_esim_devito_apply.py:296:        n_offsets=n_offsets,
+scripts/tier3_esim_devito_apply.py:298:        offset_alphabet=offset_alphabet,
+scripts/tier3_esim_devito_apply.py:309:    the host-side einsum baseline to fp64.
+scripts/tier3_esim_devito_apply.py:325:    # cells × n_offsets ~ 50 means ~250 terms per Eq, manageable)
+scripts/tier3_esim_devito_apply.py:381:    print("  Devito second apply (cached)...", flush=True)
+scripts/tier3_esim_recursion.py:9:  the same recursion structure):
+scripts/tier3_esim_recursion.py:13:  Two new conditions on U_i^k from M_i^{k-1} U_i^{k-1} = 0:
+scripts/tier3_esim_recursion.py:35:slot — that condition is already encoded by M_i^{k-1} acting on the
+scripts/tier3_esim_recursion.py:239:def pi_row_at_offset(dx_offset: float, dy_offset: float, k: int,
+scripts/tier3_esim_recursion.py:241:    """LP04 Eq 32: Taylor row vector Π_{i,j}^k at relative offset
+scripts/tier3_esim_recursion.py:242:    (dx_offset, dy_offset) = (x_i - x_P, y_j - y_P).
+scripts/tier3_esim_recursion.py:271:    # level k weight = (weight at level k-1)  ⊗  [1, dx_offset, dy_offset]
+scripts/tier3_esim_recursion.py:277:            new_weights.append(w * dx_offset)
+scripts/tier3_esim_recursion.py:278:            new_weights.append(w * dy_offset)
+scripts/tier3_esim_petrobras_scale_test.py:4:(dx=0.005 km, Lx=6.0 km, Ly=4.30 km, ~6000 solid-side irregular cells)
+scripts/tier3_esim_petrobras_scale_test.py:61:    field. The full grid has ~5944 solid-side irregular cells at dip=30°
+scripts/tier3_esim_petrobras_scale_test.py:62:    per the Tier 3 static test; this is the same domain at production
+scripts/tier3_esim_petrobras_scale_test.py:105:    print(f"  cond(M) max:    {tables.cond_M.max():.3e}")
+scripts/tier3_esim_petrobras_scale_test.py:106:    print(f"  cond(M) median: {np.median(tables.cond_M):.3e}")
+scripts/tier3_esim_petrobras_scale_test.py:174:    fluid-side extension and zeros elsewhere. Catches off-by-component
+scripts/tier3_esim_petrobras_scale_test.py:177:    The LP04 fluid-as-degenerate-solid jump conditions for a non-zero
+scripts/tier3_esim_petrobras_scale_test.py:180:    continues. Easiest: set v_1 = 1 on BOTH sides (both fluid and solid
+scripts/tier3_esim_petrobras_scale_test.py:182:    Jump conditions trivially satisfied; U* should reproduce v_1=1 at
+
+exec
+/bin/zsh -lc "sed -n '260,640p' scripts/tier3_esim_projector.py" in /Users/ggorman/projects/reviews
+exec
+/bin/zsh -lc "sed -n '320,420p' scripts/tier3_esim_precompute.py" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+    # LP04 Appendix A G matrices for fluid-as-degenerate-solid at the
+    # state level (no compatibility reduction beyond k=0 for fluid;
+    # σ-symmetry triggers only at k≥2 for solid).
+    state_dim_rec = state_components * (3 ** k)   # recursive layout
+    n_minimal_monomials = (k + 1) * (k + 2) // 2
+    state_dim_min = state_components * n_minimal_monomials
+
+    # Collapse recursive → minimal basis to remove ∂x∂y ≡ ∂y∂x
+    # redundancy (cond(M) blows up to 1e19+ without this).
+    if k >= 2:
+        T = collapse_matrix(k, state_components)
+        L_1 = L_1 @ T
+        L_2 = L_2 @ T
+        C_jump = C_jump @ T
+
+    state_dim = state_dim_min if k >= 2 else state_dim_rec
+    G_1 = np.eye(state_dim)
+    G_2 = np.eye(state_dim)
+
+    K_1 = build_K_via_svd(L_1, G_1)
+    K_2 = build_K_via_svd(L_2, G_2)
+    n_w1 = K_1.shape[1]
+    n_w2 = K_2.shape[1]
+
+    S_1 = C_jump @ G_1 @ K_1
+    S_2 = C_jump @ G_2 @ K_2
+    U_s2, sig_s2, Vt_s2 = svd(S_2, full_matrices=True)
+    tol_s2 = max(S_2.shape) * np.finfo(np.float64).eps * (sig_s2.max() if sig_s2.size else 0)
+    rank_s2 = int((sig_s2 > tol_s2).sum())
+    S_2_pinv = pinv(S_2)
+    R_S2 = Vt_s2[rank_s2:, :].T
+    n_lambda = R_S2.shape[1]
+
+    A_W1 = S_2_pinv @ S_1
+    A_lambda = R_S2
+
+    # Per-grid-point row block for B_1: U(x_i, y_j) = Π_{i,j}^k · G_1 · K_1 · W_1
+    # Π_{i,j}^k is row vector length state_dim_k; G_1·K_1 is state_dim_k × n_w1;
+    # so Π·G·K is 1 × n_w1, and we want state_components RHS rows per grid
+    # point (one per state component of U^0).
+    #
+    # Wait — at k=0 we returned ONE row per state component (5 rows per
+    # cell). At k=1+, we still want 5 rows per cell (the actual state at
+    # P projected to (x_i, y_j)). The Π row vector now produces ONE row
+    # (a scalar Π · U_k_vector = scalar U(x_i, y_j)) — that doesn't match.
+    #
+    # Correction: Π is a (state_components, state_dim_k) BLOCK matrix
+    # where row r selects the r-th state component projected through
+    # Taylor monomials. Eq 32's Π is a row of MONOMIAL WEIGHTS; for a
+    # multi-component state, we tensor with identity_{state_components}.
+
+    M_rows = []
+    GK_1 = G_1 @ K_1
+    GK_2_A = G_2 @ K_2 @ A_W1
+    GK_2_lam = G_2 @ K_2 @ A_lambda
+    # Pi vector: use MINIMAL Taylor weights at k≥2 (state_dim_min),
+    # else recursive layout (state_dim_rec).
+    use_minimal = (k >= 2)
+    for (i, j) in B1:
+        x_i = anchor_grid_xy[0] + i * dx
+        y_j = anchor_grid_xy[1] + j * dx
+        dxo = x_i - P_xy[0]
+        dyo = y_j - P_xy[1]
+        if use_minimal:
+            pi_scalar = minimal_taylor_weights(dxo, dyo, k)
+        else:
+            pi_scalar = _pi_scalar_at_offset(dxo, dyo, k)
+        pi_block = _pi_block_matrix(pi_scalar, state_components)
+        row = np.hstack([pi_block @ GK_1,
+                          np.zeros((state_components, n_lambda))])
+        M_rows.append(row)
+    for (i, j) in B2:
+        x_i = anchor_grid_xy[0] + i * dx
+        y_j = anchor_grid_xy[1] + j * dx
+        dxo = x_i - P_xy[0]
+        dyo = y_j - P_xy[1]
+        if use_minimal:
+            pi_scalar = minimal_taylor_weights(dxo, dyo, k)
+        else:
+            pi_scalar = _pi_scalar_at_offset(dxo, dyo, k)
+        pi_block = _pi_block_matrix(pi_scalar, state_components)
+        row = np.hstack([pi_block @ GK_2_A,
+                          pi_block @ GK_2_lam])
+        M_rows.append(row)
+    M = np.vstack(M_rows) if M_rows else np.zeros((0, n_w1 + n_lambda))
+
+    info = {
+        'G_1': G_1, 'G_2': G_2, 'K_1': K_1, 'K_2': K_2,
+        'L_1': L_1, 'L_2': L_2, 'C_jump': C_jump,
+        'S_1': S_1, 'S_2': S_2, 'S_2_pinv': S_2_pinv, 'R_S2': R_S2,
+        'A_W1': A_W1, 'A_lambda': A_lambda,
+        'n_w1': n_w1, 'n_w2': n_w2, 'n_lambda': n_lambda,
+        'state_dim_k': state_dim, 'state_components': state_components,
+        'k': k,
+    }
+    return M, info
+
+
+def _pi_scalar_at_offset(dxo: float, dyo: float, k: int) -> np.ndarray:
+    """Recursive Taylor weights (3^k entries) at offset (dxo, dyo)."""
+    if k == 0:
+        return np.array([1.0])
+    weights = [1.0]
+    for _ in range(k):
+        new_weights = []
+        for w in weights:
+            new_weights.append(w)
+            new_weights.append(w * dxo)
+            new_weights.append(w * dyo)
+        weights = new_weights
+    return np.array(weights)
+
+
+def _pi_block_matrix(pi_scalar: np.ndarray, state_components: int
+                      ) -> np.ndarray:
+    """Tensor Π scalar weights with identity_{state_components} so that
+    Π_block · U_k_vector = U^0 at the offset point (component-by-component).
+    """
+    n_mono = len(pi_scalar)
+    M = np.zeros((state_components, state_components * n_mono))
+    for m_idx, w in enumerate(pi_scalar):
+        for c in range(state_components):
+            M[c, m_idx * state_components + c] = w
+    return M
+
+
+def build_M_matrix_k0(B1: list[tuple[int, int]],
+                       B2: list[tuple[int, int]],
+                       sdf: np.ndarray,
+                       dx: float,
+                       anchor_grid_xy: tuple[float, float],
+                       P_xy: np.ndarray,
+                       t: np.ndarray,
+                       state_components: int = 5,
+                       ) -> tuple[np.ndarray, dict]:
+    """Assemble the over-determined M matrix at k=0 for a SINGLE
+    irregular cell's projection point P.
+
+    At k=0, V_1^0 = U_1^0 (no derivatives), so the "Taylor expansion"
+    is just U(x_i, y_j) = U_1^0 + O(Δx). M's rows on B_1 are the
+    identity I_{state_components} repeated; M's rows on B_2 use the
+    jump-condition coupling Eq 31 to express U_2 in terms of U_1.
+
+    This builds the over-determined system stacking ALL state
+    components at ALL grid points in B. For k=0 with state_components=5
+    (fluid-as-degenerate-solid), the LHS dimension is
+    5*(|B_1| + |B_2|), the RHS unknown is W_1^0 + Λ^0.
+
+    Returns:
+        M : the over-determined matrix
+        info : dict of construction metadata
+    """
+    G_1 = G_solid_zero()  # 5x5 identity (using degenerate-solid for fluid)
+    G_2 = G_solid_zero()  # 5x5 identity
+    L_1 = L1_zero_numeric(t)  # 1x3 zero — but we're using 5-component
+    # For degenerate-solid fluid at k=0, V_1 = U_1 (no constraint), so
+    # K_1 = identity_5
+    K_1 = np.eye(5)
+    # Solid side has the L_2 tangential-shear constraint:
+    L_2 = L2_zero_numeric(t)  # 1x5
+    K_2 = build_K_via_svd(L_2, G_2)  # spans tangential-shear nullspace
+    # Solid V_2 = K_2 W_2, with dim(W_2) = 4 (5 - 1 BC)
+    n_w1 = K_1.shape[1]  # 5
+    n_w2 = K_2.shape[1]  # 4
+
+    # Jump conditions at k=0: C_1 · G_1 · V_1 = C_2 · G_2 · V_2
+    # (Eq 27, here for degenerate-solid fluid using C_2 on both sides):
+    # We use C_2_zero on both sides since both are 5-component.
+    # The jump conditions ARE LP04 Eq 10: [v·n] = 0, -p n = σ n,
+    # and σ_nt = 0 (the L_2 row, already in solid's K_2 nullspace).
+    C_jump = C2_zero_numeric(t)  # 2×5 — generic jump-condition rows
+
+    # Build S matrices per Eq 29:
+    S_1 = C_jump @ G_1 @ K_1   # 2×5
+    S_2 = C_jump @ G_2 @ K_2   # 2×4
+
+    # Eq 30: S_1 W_1 = S_2 W_2  → solve for W_2 in terms of W_1 + Λ:
+    # W_2 = pinv(S_2) · S_1 · W_1 + R_{S_2} · Λ
+    # where R_{S_2} spans nullspace of S_2.
+    U_s2, sig_s2, Vt_s2 = svd(S_2, full_matrices=True)
+    tol_s2 = max(S_2.shape) * np.finfo(np.float64).eps * (sig_s2.max() if sig_s2.size else 0)
+    rank_s2 = int((sig_s2 > tol_s2).sum())
+    S_2_pinv = pinv(S_2)
+    R_S2 = Vt_s2[rank_s2:, :].T  # nullspace columns of S_2 — shape (n_w2, n_lambda)
+    n_lambda = R_S2.shape[1]
+
+    # Per Eq 31: W_2 = S_2^{-1} [S_1 | R_{S_2}] (W_1, Λ)^T
+    # i.e. W_2 = S_2_pinv @ S_1 @ W_1 + R_S2 @ Λ
+    # (Note: LP04 writes [S_1 | R_S2] (W_1, Λ)^T as a single block
+    #  acting on the concatenated (W_1, Λ). The natural decomposition
+    #  is the linear sum above when |Λ| = nullspace dim.)
+    # Build the W_2 = A_W1 · W_1 + A_lambda · Λ form:
+    A_W1 = S_2_pinv @ S_1            # (n_w2, n_w1)
+    A_lambda = R_S2                   # (n_w2, n_lambda)
+
+    # Now build M row-by-row. For each grid point (i,j) in B_1:
+    #   U(x_i, y_j) ≈ Π_{i,j}^0 · G_1 · K_1 · W_1 + O(Δx)
+    # At k=0 the Π row vector is just scalar 1 (no derivative
+    # contributions). So a row on B_1 reads:
+    #   U(x_i, y_j) = G_1 · K_1 · W_1
+    # i.e. M's B_1 block has rows = G_1 · K_1 with each grid point
+    # contributing 5 rows (one per state component).
+    #
+    # For B_2:
+    #   U(x_i, y_j) = G_2 · K_2 · W_2
+    #              = G_2 · K_2 · (A_W1 · W_1 + A_lambda · Λ)
+    M_block_b1_W1 = G_1 @ K_1                          # (5, n_w1)
+    M_block_b1_lambda = np.zeros((5, n_lambda))
+    M_block_b2_W1 = G_2 @ K_2 @ A_W1                   # (5, n_w1)
+    M_block_b2_lambda = G_2 @ K_2 @ A_lambda           # (5, n_lambda)
+
+    # Stack rows: |B_1|*5 + |B_2|*5 equations, unknown vector has
+    # n_w1 + n_lambda = 5 + 1 = 6 components.
+    n_b1, n_b2 = len(B1), len(B2)
+    n_unknown = n_w1 + n_lambda
+    n_eq = (n_b1 + n_b2) * state_components
+    M = np.zeros((n_eq, n_unknown))
+    row = 0
+    for _ in B1:
+        M[row:row + state_components, :n_w1] = M_block_b1_W1
+        M[row:row + state_components, n_w1:] = M_block_b1_lambda
+        row += state_components
+    for _ in B2:
+        M[row:row + state_components, :n_w1] = M_block_b2_W1
+        M[row:row + state_components, n_w1:] = M_block_b2_lambda
+        row += state_components
+
+    info = {
+        'G_1': G_1, 'G_2': G_2,
+        'K_1': K_1, 'K_2': K_2,
+        'S_1': S_1, 'S_2': S_2, 'S_2_pinv': S_2_pinv, 'R_S2': R_S2,
+        'A_W1': A_W1, 'A_lambda': A_lambda,
+        'n_w1': n_w1, 'n_w2': n_w2, 'n_lambda': n_lambda,
+        'state_components': state_components,
+    }
+    return M, info
+
+
+def assemble_N_k0_solid_side(B1: list[tuple[int, int]],
+                              B2: list[tuple[int, int]],
+                              sdf: np.ndarray,
+                              dx: float,
+                              anchor_grid_xy: tuple[float, float],
+                              P_xy: np.ndarray,
+                              t: np.ndarray,
+                              state_components: int = 5,
+                              ) -> tuple[np.ndarray, float, dict]:
+    """For an irregular cell on the SOLID side (sdf < 0): compute the
+    master row vector N such that U*_{I,J} ≈ N · (U^n)_B reproduces
+    the fluid-side state (extended across Γ) at the cell.
+
+    LP04 Eq 42: U*_{I,J} = Π_{I,J}^0 · G_1^0 · K_1^0 · M̄^{-1} · (U^n)_B
+    At k=0 with Π = scalar 1: U*_{I,J} = G_1 · K_1 · W_1.
+
+    Returns:
+        N : (state_components, n_eq) row-vector matrix; one row per
+            target state component.
+        cond_M : condition number of M.
+        info : matrix construction metadata.
+    """
+    M, info = build_M_matrix_k0(B1, B2, sdf, dx, anchor_grid_xy, P_xy, t,
+                                  state_components)
+    # M̄^{-1}: restrict M's pseudoinverse to the first n_w1 rows
+    # (W_1 components only — drop Λ rows per Eq 40).
+    M_pinv = pinv(M)
+    Mbar_inv = M_pinv[:info['n_w1'], :]  # (n_w1, n_eq)
+    # Π_{I,J}^0 = scalar 1 at k=0, so the U* mapping is:
+    # U*_{I,J} = G_1 · K_1 · W_1 = G_1 · K_1 · Mbar_inv · (U^n)_B
+    G_1 = info['G_1']
+    K_1 = info['K_1']
+    N = G_1 @ K_1 @ Mbar_inv  # (state_components, n_eq)
+    cond_M = cond(M)
+    return N, cond_M, info
+
+
+def assemble_N_fluid_side_general(B1, B2, sdf, dx, anchor_grid_xy,
+                                    P_xy, t, k=0,
+                                    state_components=5,
+                                    A_fluid=None, B_fluid=None,
+                                    A_solid=None, B_solid=None,
+                                    target_xy: np.ndarray = None,
+                                    ) -> tuple[np.ndarray, float, dict]:
+    """Master row vector N for a FLUID-side (Ω_1) irregular cell.
+
+    Per LP04 Eq 42 with the side-swap noted by the paper: for an
+    irregular point on Ω_1, replace G_1^k, K_1^k by G_2^k, K_2^k:
+        U*_{I,J} = Π · G_2 · K_2 · W_2 · (U^n)_B
+    with W_2 derived from the (W_1, Λ) solution via Eq 31:
+        W_2 = S_2^{-1} (S_1 | R_S2) (W_1, Λ)^T
+    The combined transform from (U^n)_B → W_2 uses the FULL
+    Mbar-pinv (not just the W_1 row block) to recover both W_1
+    and Λ, then assembles W_2.
+    """
+    M, info = build_M_matrix_general(B1, B2, sdf, dx, anchor_grid_xy,
+                                       P_xy, t, k, state_components,
+                                       A_fluid, B_fluid, A_solid, B_solid)
+    M_pinv = pinv(M)
+    n_w1 = info['n_w1']
+    # W_2 = (A_W1 | A_lambda) · M_pinv · (U^n)_B
+    # where A_W1, A_lambda are the LP04 Eq 31 transforms.
+    W1_from_UB = M_pinv[:n_w1, :]                # (n_w1, n_eq)
+    Lambda_from_UB = M_pinv[n_w1:, :]            # (n_lambda, n_eq)
+    A_W1 = info['A_W1']                          # (n_w2, n_w1)
+    A_lambda = info['A_lambda']                  # (n_w2, n_lambda)
+    W2_from_UB = A_W1 @ W1_from_UB + A_lambda @ Lambda_from_UB
+
+    G_2 = info['G_2']
+    K_2 = info['K_2']
+    if target_xy is None:
+        dxo, dyo = 0.0, 0.0
+    else:
+        dxo = target_xy[0] - P_xy[0]
+        dyo = target_xy[1] - P_xy[1]
+    if k >= 2:
+        pi_scalar = minimal_taylor_weights(dxo, dyo, k)
+    else:
+        pi_scalar = _pi_scalar_at_offset(dxo, dyo, k)
+    pi_block = _pi_block_matrix(pi_scalar, state_components)
+    N = pi_block @ G_2 @ K_2 @ W2_from_UB        # (sc, n_eq)
+    cond_M = cond(M)
+    return N, cond_M, info
+
+
+def assemble_N_solid_side_general(B1, B2, sdf, dx, anchor_grid_xy,
+                                    P_xy, t, k=0,
+                                    state_components=5,
+                                    A_fluid=None, B_fluid=None,
+                                    A_solid=None, B_solid=None,
+                                    target_xy: np.ndarray = None,
+                                    ) -> tuple[np.ndarray, float, dict]:
+    """General-order projector N: U*_{I,J} = N · (U^n)_B at a solid-side
+    irregular cell located at `target_xy`.
+
+    The Π row vector is evaluated at offset (target_xy - P_xy) to give
+    the across-Γ extension AT THE TARGET CELL.
+    """
+    M, info = build_M_matrix_general(B1, B2, sdf, dx, anchor_grid_xy,
+                                       P_xy, t, k, state_components,
+                                       A_fluid, B_fluid, A_solid, B_solid)
+    M_pinv = pinv(M)
+    Mbar_inv = M_pinv[:info['n_w1'], :]  # n_w1 rows
+    G_1 = info['G_1']
+    K_1 = info['K_1']
+    # Π evaluated at target_xy offset:
+    if target_xy is None:
+        # Default: target IS P (gives U^0 at P, i.e. value on Γ)
+        dxo, dyo = 0.0, 0.0
+    else:
+        dxo = target_xy[0] - P_xy[0]
+        dyo = target_xy[1] - P_xy[1]
+    if k >= 2:
+        pi_scalar = minimal_taylor_weights(dxo, dyo, k)
+    else:
+        pi_scalar = _pi_scalar_at_offset(dxo, dyo, k)
+    pi_block = _pi_block_matrix(pi_scalar, state_components)
+    # U*_{I,J} = Π_block · G_1 · K_1 · M̄^{-1} · (U^n)_B
+    N = pi_block @ G_1 @ K_1 @ Mbar_inv  # (state_components, n_eq)
+    cond_M = cond(M)
+    return N, cond_M, info
+
+
+def gather_UB(field: np.ndarray, B1: list[tuple[int, int]],
+              B2: list[tuple[int, int]], state_components: int = 5,
+              ) -> np.ndarray:
+    """Assemble the (U^n)_B vector by stacking per-grid-point state
+    in the order B_1 first, then B_2 (matching M's row order).
+
+    `field` shape: (state_components, Nx, Ny) — first axis indexes
+    the state components.
+    """
+    parts = []
+    for (i, j) in B1 + B2:
+        parts.append(field[:, i, j])
+    return np.concatenate(parts) if parts else np.zeros(0)
+
+ succeeded in 0ms:
+    U_star: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Apply the precomputed ESIM tables to a snapshot field via a
+    host-side Python loop. Used for SMOKE VERIFICATION; not the
+    production hot path (per Codex+Gemini Q1).
+
+    Parameters
+    ----------
+    tables : ESIMTables
+    field : (5, Nx, Ny) — snapshot of (v_1, v_2, σ_11, σ_12, σ_22)
+    U_star : (5, Nx, Ny), optional — destination buffer. If None, a
+        zero-initialised buffer is allocated.
+
+    Returns
+    -------
+    U_star : (5, Nx, Ny) with modified values written at each
+        irregular cell (i, j); other cells are left at 0.
+    """
+    if U_star is None:
+        U_star = np.zeros_like(field)
+    sc = tables.state_components
+    for cell_idx in range(tables.n_cells):
+        i, j = tables.target_ij[cell_idx]
+        B_ij = tables.B_ij[cell_idx]
+        N = tables.N[cell_idx]   # (sc, sc * n_B)
+        # Gather (U^n)_B in the row order N expects (fluid first, then solid)
+        UB = np.empty(sc * len(B_ij))
+        for b_idx in range(len(B_ij)):
+            ib, jb = B_ij[b_idx]
+            UB[b_idx * sc : (b_idx + 1) * sc] = field[:, ib, jb]
+        U_star[:, i, j] = N @ UB
+    return U_star
+
+
+def main_smoke():
+    """Smoke-verify the precompute → apply pipeline on a constant field
+    and a plane-wave field. Matches the Tier 3 static-test PASS
+    behaviour but via the production-shaped precompute → apply split.
+    """
+    import time
+    print("=" * 70)
+    print("Tier β.1 — precompute + apply smoke verification")
+    print("=" * 70)
+
+    cases = [
+        ('constant', 0, 1e-10),
+        ('constant', 2, 1e-10),
+        # Plane-wave at k=2 with dx=0.005 ⇒ residual ~ 2e-3 per Tier α
+        # (q·dx · κ)^3 ≈ 0.22^3 ≈ 0.011 at λ=0.5 km
+        ('plane_wave', 2, 5e-3),
+    ]
+
+    for field_kind, k, thresh in cases:
+        t0 = time.time()
+        tables = precompute_esim_tables(
+            dip_deg=30.0, dx=0.005, Lx=2.0, Ly=1.4,
+            anchor_x=1.0, anchor_y=0.5, k=k,
+            max_cells=200, verbose=False,
+        )
+        t_pre = time.time() - t0
+
+        # Build the field
+        Nx = int(2.0 / 0.005) + 1
+        Ny = int(1.4 / 0.005) + 1
+        X = np.linspace(0, 2.0, Nx)
+        Y = np.linspace(0, 1.4, Ny)
+        XX, YY = np.meshgrid(X, Y, indexing='ij')
+        sdf = signed_distance_dipping_line(XX, YY, 30.0, 1.0, 0.5)
+        anchor_xy = np.array([1.0, 0.5])
+        _, t_vec = normal_and_tangent(30.0)
+
+        field = np.zeros((5, Nx, Ny))
+        if field_kind == 'constant':
+            field[2, :, :] = -1.0
+            field[4, :, :] = -1.0
+
+            def analytic(x, y):
+                return np.array([0.0, 0.0, -1.0, 0.0, -1.0])
+        else:  # plane_wave
+            wavelength = 0.5
+            kappa = 2.0 * np.pi / wavelength
+            kx, ky = kappa * t_vec
+            for i in range(Nx):
+                for j in range(Ny):
+                    p = np.cos(kx * (X[i] - 1.0) + ky * (Y[j] - 0.5))
+                    field[2, i, j] = -p
+                    field[4, i, j] = -p
+
+            def analytic(x, y):
+                p = np.cos(kx * (x - 1.0) + ky * (y - 0.5))
+                return np.array([0.0, 0.0, -p, 0.0, -p])
+
+        t0 = time.time()
+        U_star = apply_esim_python(tables, field)
+        t_apply = time.time() - t0
+
+        # Residual on irregular cells
+        residuals = []
+        for cell_idx in range(tables.n_cells):
+            i, j = tables.target_ij[cell_idx]
+            u_est = U_star[:, i, j]
+
+exec
+/bin/zsh -lc "sed -n '1,180p' scripts/tier3_esim_petrobras_scale_test.py" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+"""Tier β.1.5 — production-scale validation of the ESIM precompute API.
+
+Runs the precompute → apply pipeline at the actual Petrobras dimensions
+(dx=0.005 km, Lx=6.0 km, Ly=4.30 km, ~6000 solid-side irregular cells)
+with Petrobras material parameters (water Vp=1.5, TTI Vp~3.0, Vs~1.5,
+ρ_fluid=1.0, ρ_solid=2.5). Three goals:
+
+  1. Confirm the precompute scales to production resolution without
+     hitting wall-clock or memory walls (β.1 only tested 200 cells).
+  2. Confirm the LP04 residual still hits its theoretical floor at
+     this resolution with realistic material contrast in the flux
+     Jacobians (k=1 recursion is material-dependent).
+  3. Sanity-check the state-component ordering assumption (Codex Q4
+     "topological bookkeeping" risk) by constructing a known field
+     with a SPECIFIC component active and checking U* picks that
+     component up correctly.
+
+If these three checks pass, the β.1 precompute API is production-
+ready and the multi-day β.2-β.4 (Devito storage + compiled fill
+operator + RSG read-substitution) is worth the investment.
+"""
+from __future__ import annotations
+
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'scripts'))
+
+from tier3_esim_precompute import (
+    precompute_esim_tables,
+    apply_esim_python,
+)
+from tier3_esim_projector import (
+    normal_and_tangent,
+    project_to_interface,
+)
+from it_e_tier1_geometry import signed_distance_dipping_line
+
+
+# Petrobras production config (matches scripts/run_dip_layered_benchmark.py)
+PETROBRAS_LX = 6.0      # km
+PETROBRAS_LY = 4.30     # km
+PETROBRAS_DX = 0.005    # km — production resolution
+PETROBRAS_ANCHOR_X = 3.0
+PETROBRAS_ANCHOR_Y = 1.0   # sea-bottom anchor (water above, TTI below)
+
+# Petrobras material parameters
+RHO_WATER = 1.0
+VP_WATER = 1.5
+RHO_SOLID = 2.5
+VP_SOLID = 3.0     # representative TTI Vp_x
+VS_SOLID = 1.5     # representative TTI Vs_h
+
+
+def case_a_scale_test_constant(k: int = 2):
+    """Production-scale precompute on the full Petrobras grid + constant
+    field. The full grid has ~5944 solid-side irregular cells at dip=30°
+    per the Tier 3 static test; this is the same domain at production
+    material parameters."""
+    print("=" * 70)
+    print(f"Case A — Petrobras-scale precompute, k={k}, constant field")
+    print("=" * 70)
+    t0 = time.time()
+    tables = precompute_esim_tables(
+        dip_deg=30.0,
+        dx=PETROBRAS_DX,
+        Lx=PETROBRAS_LX, Ly=PETROBRAS_LY,
+        anchor_x=PETROBRAS_ANCHOR_X, anchor_y=PETROBRAS_ANCHOR_Y,
+        k=k, q_factor=3.5, so=8,
+        Vp_fluid=VP_WATER, Vp_solid=VP_SOLID,
+        Vs_solid=VS_SOLID,
+        rho_fluid=RHO_WATER, rho_solid=RHO_SOLID,
+        verbose=True,
+    )
+    t_pre = time.time() - t0
+
+    # Build a constant analytical field: σ_ij = -p·δ_ij with p=1
+    Nx = int(PETROBRAS_LX / PETROBRAS_DX) + 1
+    Ny = int(PETROBRAS_LY / PETROBRAS_DX) + 1
+    field = np.zeros((5, Nx, Ny))
+    field[2, :, :] = -1.0    # σ_11 = -p
+    field[4, :, :] = -1.0    # σ_22 = -p
+
+    t0 = time.time()
+    U_star = apply_esim_python(tables, field)
+    t_apply = time.time() - t0
+
+    # Residuals at irregular cells (analytical extension == constant field)
+    expected = np.array([0.0, 0.0, -1.0, 0.0, -1.0])
+    residuals = []
+    for cell_idx in range(tables.n_cells):
+        i, j = tables.target_ij[cell_idx]
+        u_est = U_star[:, i, j]
+        residuals.append(np.linalg.norm(u_est - expected, ord=np.inf))
+    residuals = np.array(residuals)
+
+    print(f"\n  n_cells:        {tables.n_cells}")
+    print(f"  t_precompute:   {t_pre:.2f}s ({t_pre / tables.n_cells * 1e3:.2f}ms/cell)")
+    print(f"  t_apply:        {t_apply:.3f}s ({t_apply / tables.n_cells * 1e6:.1f}µs/cell)")
+    print(f"  max residual:   {residuals.max():.3e}")
+    print(f"  cond(M) max:    {tables.cond_M.max():.3e}")
+    print(f"  cond(M) median: {np.median(tables.cond_M):.3e}")
+    passed = residuals.max() < 1e-10
+    print(f"  {'PASS' if passed else 'FAIL'}")
+    return passed, tables, t_pre, t_apply
+
+
+def case_b_scale_test_plane_wave(tables, k: int = 2,
+                                   wavelength: float = 0.5):
+    """Production-scale apply with a plane-wave field.
+
+    Reuses the tables from case A (independent of field). Expected
+    residual ~ O(h^(k+1)) where h = q·dx.
+    """
+    print("\n" + "=" * 70)
+    print(f"Case B — Petrobras-scale apply, k={k}, plane wave (λ={wavelength}km)")
+    print("=" * 70)
+
+    _, t_vec = normal_and_tangent(30.0)
+    kappa = 2.0 * np.pi / wavelength
+    kx, ky = kappa * t_vec
+    anchor_xy = np.array([PETROBRAS_ANCHOR_X, PETROBRAS_ANCHOR_Y])
+
+    Nx = int(PETROBRAS_LX / PETROBRAS_DX) + 1
+    Ny = int(PETROBRAS_LY / PETROBRAS_DX) + 1
+    X = np.linspace(0, PETROBRAS_LX, Nx)
+    Y = np.linspace(0, PETROBRAS_LY, Ny)
+    field = np.zeros((5, Nx, Ny))
+    for i in range(Nx):
+        for j in range(Ny):
+            phase = kx * (X[i] - anchor_xy[0]) + ky * (Y[j] - anchor_xy[1])
+            p = np.cos(phase)
+            field[2, i, j] = -p
+            field[4, i, j] = -p
+
+    t0 = time.time()
+    U_star = apply_esim_python(tables, field)
+    t_apply = time.time() - t0
+
+    residuals = []
+    for cell_idx in range(tables.n_cells):
+        i, j = tables.target_ij[cell_idx]
+        phase = (kx * (X[i] - anchor_xy[0])
+                 + ky * (Y[j] - anchor_xy[1]))
+        p_analytic = np.cos(phase)
+        expected = np.array([0.0, 0.0, -p_analytic, 0.0, -p_analytic])
+        u_est = U_star[:, i, j]
+        residuals.append(np.linalg.norm(u_est - expected, ord=np.inf))
+    residuals = np.array(residuals)
+
+    # Tier α predicts (q·dx·κ)^(k+1)
+    h_eff = 3.5 * PETROBRAS_DX
+    predicted = (h_eff * kappa) ** (k + 1)
+    print(f"  t_apply:        {t_apply:.3f}s")
+    print(f"  max residual:   {residuals.max():.3e}")
+    print(f"  Tier α predict: ~{predicted:.2e}  (q·dx·κ)^{k+1}")
+    print(f"  mean residual:  {residuals.mean():.3e}")
+    # PASS if max ≤ 5× the prediction (allow margin for non-leading
+    # truncation terms)
+    passed = residuals.max() < 5 * predicted
+    print(f"  {'PASS' if passed else 'FAIL'}")
+    return passed
+
+
+def case_c_component_ordering_sanity(tables):
+    """Codex Q4 topology-bookkeeping check.
+
+    Inject a field where ONLY ONE component is active (e.g., v_1 = 1
+    everywhere, others = 0). U* must reproduce that component on the
+    fluid-side extension and zeros elsewhere. Catches off-by-component
+    indexing bugs in the gather/dot machinery.
+
+    The LP04 fluid-as-degenerate-solid jump conditions for a non-zero
+    v_1 component: [v·n] = -y' v_1_f + x' v_2_f = -y' · 1 + 0 = -y' ≠ 0
+    (a non-trivial jump!) unless v_1_solid is set so the normal-velocity
+    continues. Easiest: set v_1 = 1 on BOTH sides (both fluid and solid
+
+exec
+/bin/zsh -lc "sed -n '1,260p' scripts/tier3_esim_devito_apply.py" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+"""β.4.2 — production Devito-native ESIM apply (SCAFFOLD).
+
+Wraps the β.3 PackedESIMTables (per-cell padded master-row vectors)
+into a Devito Operator that applies the LP04 ESIM gather at all
+irregular cells in a single compiled call. The pattern verified in
+β.4.1 (scripts/tier3_esim_devito_proto_*):
+
+  - cell_id is a single CustomDimension iterating over irregular cells.
+  - Offsets are enumerated in Python at Eq-construction time (literal
+    integers), avoiding the cell_id ↔ off_id cyclic-dependency Devito
+    rejects.
+  - U[ti[cell_id] + literal_di, tj[cell_id] + literal_dj] is the
+    indirect-indexing pattern Devito's lowering handles.
+
+Data-layout conversion from PackedESIMTables:
+
+  PackedESIMTables stores per-cell B_ij as ABSOLUTE grid indices,
+  with cell_N indexed by per-cell slot b_idx (variable across cells).
+  Devito needs a UNIFORM offset alphabet across cells — so we:
+
+  1. Compute relative offsets per cell: (B_i, B_j) - (target_i, target_j)
+  2. Build the union of all distinct offsets → the alphabet
+  3. Repack cell_N as (cell_id, c_out, c_in, off_idx in alphabet),
+     zeros where a cell doesn't use that offset.
+
+The repacked layout is what the Devito Operator consumes.
+
+────────────────────────────────────────────────────────────────────────
+STATUS (2026-05-27): MECHANISM VERIFIED, FULL-SCALE PERFORMANCE
+ISSUE OPEN.
+────────────────────────────────────────────────────────────────────────
+
+At full Petrobras dip=30° (11,913 cells), the offset alphabet is
+~115 distinct offsets (not the ~41 used in β.4.1's hand-picked
+prototype). Reason: the disk B around the orthogonal projection P
+has offsets RELATIVE TO THE TARGET CELL M, and the (cell M to P)
+component varies sub-cell per cell. So the union of relative
+offsets across all cells is much wider than a single disk's
+membership.
+
+The Devito Eq becomes 5 Eqs × (5 c_in × 115 off) = 575 terms per
+Eq. Building + compiling are fast (<10s), but the FIRST apply
+call stalls — gcc/clang takes minutes-to-forever JIT-compiling
+the generated C kernel (~10k+ multiply-add terms after CSE).
+
+The β.4.1 prototype proves the pattern works at small alphabet
+(41 offsets → 0.64ms apply). The β.4.2 implementation here IS
+CORRECT at small scale (10-cell test correctly compiles + applies)
+but doesn't scale to the full production alphabet without further
+optimisation.
+
+PATHS FORWARD (open):
+
+(α) Reduce alphabet size by ANCHORING DISK B at P_grid (nearest
+    grid point to P) instead of at M. Alphabet should drop to
+    ~40-50 offsets (single-disk membership). Requires refactoring
+    the precompute to use P_grid as the cell anchor + storing
+    cell-to-P_grid offset separately.
+
+(β) Per-batch operators: group cells with similar alphabets
+    into batches; one Operator per batch with smaller alphabet.
+
+(γ) Different Devito primitive: try `SparseTimeFunction.inject`
+    with SVD-decomposed N coefficients (multiple separable
+    PrecomputedSparseFunctions). Complex but may scale better.
+
+(δ) cfunction injection: hand-write the C gather loop, register
+    via Devito's cfunction hook. Bypasses Devito's symbolic
+    pipeline for the ESIM apply specifically.
+
+The user's "(N-1)-D field" insight from 2026-05-27 maps onto (α):
+anchoring at P_grid is exactly the manifold-coordinate parameterisation
+they suggested. The (N-1)-D arc-length parameter is roughly
+proportional to the P_grid index along the interface line.
+"""
+from __future__ import annotations
+
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'scripts'))
+
+from tier3_esim_storage import PackedESIMTables
+
+# Devito imports gated to allow this module to load when Devito missing
+try:
+    from devito import (
+        Grid, Function, CustomDimension, Dimension, Eq, Operator,
+    )
+    _DEVITO_OK = True
+except ImportError:
+    _DEVITO_OK = False
+
+
+@dataclass
+class DevitoESIMApply:
+    """Production Devito-compiled ESIM apply.
+
+    Constructed once at setup from a PackedESIMTables; the resulting
+    Operator can be reused across timesteps (just rebind U field data
+    via the apply() method).
+    """
+    grid: object                   # Devito Grid
+    n_cells: int
+    n_offsets: int
+    state_components: int
+    offset_alphabet: np.ndarray    # (n_offsets, 2) int32 — (di, dj)
+    op: object                     # Devito Operator
+    # Devito Function handles (so the caller can interrogate / re-load)
+    ti: object
+    tj: object
+    N_coeffs: object
+    U_funcs: list                  # one Function per state component
+    U_star: object                 # (cell_id, c_out) result Function
+
+    def apply(self, field: np.ndarray) -> np.ndarray:
+        """Apply ESIM gather to `field` (shape (5, Nx, Ny)).
+
+        Returns U_star_sub data of shape (n_cells, 5) — same layout
+        and ordering as PackedESIMTables.cell_target_ij.
+        """
+        for c, uf in enumerate(self.U_funcs):
+            uf.data[:] = field[c]
+        self.U_star.data[:] = 0.0
+        self.op.apply()
+        return self.U_star.data.copy()
+
+
+def _compute_offset_alphabet(packed: PackedESIMTables
+                              ) -> tuple[np.ndarray, np.ndarray]:
+    """Compute the union of relative offsets across all cells and the
+    per-cell mapping from slot b_idx to alphabet off_idx.
+
+    Returns:
+        offset_alphabet : (n_offsets, 2) int32 — (di, dj) per off_idx
+        slot_to_off_idx : (n_cells, n_B_max) int32 — alphabet index
+            for each cell's slot; -1 for unused slots (n_B[c] <= b_idx)
+    """
+    n_cells = packed.n_cells
+    n_B_max = packed.n_B_max
+
+    # Per-cell relative offsets
+    # cell_B_ij shape: (n_cells, n_B_max, 2); target_ij shape (n_cells, 2)
+    rel_offsets = packed.cell_B_ij - packed.cell_target_ij[:, np.newaxis, :]
+
+    # Mask unused slots (B_ij == -1)
+    valid_mask = packed.cell_B_ij[:, :, 0] != -1  # shape (n_cells, n_B_max)
+
+    # Collect distinct (di, dj) over valid entries
+    valid_offsets = rel_offsets[valid_mask]                # (M, 2)
+    # Unique with stable ordering by (di, dj)
+    offset_set = set(map(tuple, valid_offsets.tolist()))
+    sorted_offsets = sorted(offset_set, key=lambda d: (d[0], d[1]))
+    offset_alphabet = np.array(sorted_offsets, dtype=np.int32)
+    offset_lookup = {tuple(o.tolist()): k for k, o in enumerate(offset_alphabet)}
+
+    # Build per-cell slot→alphabet map
+    slot_to_off_idx = np.full((n_cells, n_B_max), -1, dtype=np.int32)
+    for c in range(n_cells):
+        for b in range(n_B_max):
+            if not valid_mask[c, b]:
+                continue
+            key = (int(rel_offsets[c, b, 0]), int(rel_offsets[c, b, 1]))
+            slot_to_off_idx[c, b] = offset_lookup[key]
+
+    return offset_alphabet, slot_to_off_idx
+
+
+def _repack_coefficients(packed: PackedESIMTables,
+                          offset_alphabet: np.ndarray,
+                          slot_to_off_idx: np.ndarray) -> np.ndarray:
+    """Repack cell_N from (cell_id, c_out, b_idx, c_in) to
+    (cell_id, c_out, c_in, off_idx in alphabet), zeros elsewhere.
+    """
+    n_cells = packed.n_cells
+    n_offsets = len(offset_alphabet)
+    sc = packed.state_components
+    N_repacked = np.zeros((n_cells, sc, sc, n_offsets), dtype=np.float64)
+    for c in range(n_cells):
+        nB = packed.cell_n_B[c]
+        for b in range(nB):
+            off_idx = slot_to_off_idx[c, b]
+            if off_idx < 0:
+                continue
+            # cell_N[c, c_out, b, c_in] → N_repacked[c, c_out, c_in, off_idx]
+            N_repacked[c, :, :, off_idx] = packed.cell_N[c, :, b, :]
+    return N_repacked
+
+
+def build_devito_esim_apply(packed: PackedESIMTables,
+                              grid: "Grid",
+                              verbose: bool = False) -> DevitoESIMApply:
+    """Construct the production Devito apply Operator from a packed
+    table. The grid must match the precompute's grid dimensions.
+    """
+    if not _DEVITO_OK:
+        raise RuntimeError("Devito not importable; install Devito first.")
+
+    Nx, Ny = grid.shape
+    sc = packed.state_components
+
+    # 1. Compute offset alphabet
+    if verbose:
+        print("Computing offset alphabet...")
+    t0 = time.time()
+    offset_alphabet, slot_to_off_idx = _compute_offset_alphabet(packed)
+    n_offsets = len(offset_alphabet)
+    if verbose:
+        print(f"  Alphabet size: {n_offsets} distinct offsets "
+              f"(per-cell n_B median ~{packed.n_B_max - 1})")
+        print(f"  Offset range: di ∈ [{offset_alphabet[:, 0].min()}, "
+              f"{offset_alphabet[:, 0].max()}], "
+              f"dj ∈ [{offset_alphabet[:, 1].min()}, "
+              f"{offset_alphabet[:, 1].max()}]")
+        print(f"  Time: {time.time() - t0:.2f}s")
+
+    # 2. Repack coefficients
+    if verbose:
+        print("Repacking coefficients...")
+    t0 = time.time()
+    N_repacked = _repack_coefficients(packed, offset_alphabet, slot_to_off_idx)
+    if verbose:
+        print(f"  Shape: {N_repacked.shape} "
+              f"({N_repacked.nbytes / 1e6:.1f} MB)")
+        print(f"  Time: {time.time() - t0:.2f}s")
+
+    # 3. Allocate Devito Functions
+    if verbose:
+        print("Allocating Devito Functions...")
+    cell_id = CustomDimension('cell_id', 0, packed.n_cells)
+    c_out_dim = Dimension('c_out_idx')
+    c_in_dim = Dimension('c_in_idx')
+    off_dim = Dimension('off_idx')
+
+    ti = Function(name='esim_ti', dimensions=(cell_id,),
+                   shape=(packed.n_cells,), dtype=np.int32)
+    tj = Function(name='esim_tj', dimensions=(cell_id,),
+                   shape=(packed.n_cells,), dtype=np.int32)
+    ti.data[:] = packed.cell_target_ij[:, 0]
+    tj.data[:] = packed.cell_target_ij[:, 1]
+
+    N = Function(name='esim_N',
+                  dimensions=(cell_id, c_out_dim, c_in_dim, off_dim),
+                  shape=(packed.n_cells, sc, sc, n_offsets),
+                  dtype=np.float64)
+    N.data[:] = N_repacked
+
+    # One Function per state component (per the β.4.1 pattern)
+    U_funcs = [
+        Function(name=f'esim_U_{c}', grid=grid, dtype=np.float64)
+        for c in range(sc)
+    ]
+    U_star = Function(name='esim_U_star',
+                       dimensions=(cell_id, c_out_dim),
+                       shape=(packed.n_cells, sc),
+
+exec
+/bin/zsh -lc "sed -n '1,220p' scripts/it_e_tier1_geometry.py" in /Users/ggorman/projects/reviews
+exec
+/bin/zsh -lc "sed -n '260,420p' scripts/tier3_esim_devito_apply.py" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+"""Tier 1A — pure-Python geometry pipeline for ESIM falsification diagnostic.
+
+Identifies "irregular cells" in the Petrobras dipping water-TTI grid:
+cells whose RSG SO=8 diagonal-stencil taps cross the analytical
+interface line. This is the geometric input that any ghost-cell or
+ESIM scheme operates on.
+
+Output:
+  - Count of irregular cells per side
+  - Spatial distribution visualisation
+  - Sanity check: at dip=0 (flat axis-aligned interface) the
+    irregular set should be a thin horizontal band; at dip=30
+    it's a diagonal band; the SO=8 diagonal stencil makes the
+    band ~9 cells thick on each side (reach = 4 taps × √2 cells).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / '00_common'))
+sys.path.insert(0, str(REPO / 'scripts'))
+
+
+# --- Petrobras config (from scripts/run_dip_layered_benchmark.py) ----
+LX = 6.0    # km
+LY = 4.30   # km — Petrobras IZ + 1 (anchor 1.28 km below top)
+# Actual values from run_dip_layered_benchmark.py petrobras_config:
+import run_dip_layered_benchmark as petro
+LX = petro.LX
+LY = petro.LY
+DX = 0.005  # km — Petrobras production resolution
+NX = int(LX / DX) + 1
+NY = int(LY / DX) + 1
+# Anchor: interface position fraction in y
+ANCHOR_X = 0.5
+INTERFACE_ANCHOR_Y_KM = petro.INTERFACE_ANCHOR_Y  # absolute km of interface anchor
+
+
+def signed_distance_dipping_line(X, Y, dip_deg, anchor_x, anchor_y):
+    """Signed distance from grid points (X, Y) to the dipping interface.
+
+    Interface line: y - y_interface(x) = 0
+    where y_interface(x) = anchor_y - tan(dip)·(x - anchor_x)
+    (per ``tti_params.dipping_layer_mask`` convention; positive dip
+    descends to the right).
+
+    The line equation in normal form:
+        tan(θ)·x + y - (anchor_y + tan(θ)·anchor_x) = 0
+    Normal vector (unnormalised): (tan(θ), 1) — pointing UP (into
+    upper layer, increasing y).
+    Unit normal: (sin(θ), cos(θ)).
+
+    SDF = (sin(θ)·(X - anchor_x) + cos(θ)·(Y - anchor_y))
+        = signed perpendicular distance, POSITIVE in upper (water) layer
+          and NEGATIVE in lower (TTI) layer.
+    """
+    th = np.radians(dip_deg)
+    return np.sin(th) * (X - anchor_x) + np.cos(th) * (Y - anchor_y)
+
+
+def identify_irregular_cells(sdf, stencil_offsets_diag):
+    """For each cell (i, j) and each diagonal-stencil offset (Δi, Δj),
+    mark the cell as irregular if SDF(i, j) and SDF(i+Δi, j+Δj) have
+    opposite signs.
+
+    Returns:
+        irregular_mask : (Nx, Ny) bool — True if ANY tap crosses interface
+        crossing_count : (Nx, Ny) int  — number of crossing taps per cell
+    """
+    Nx, Ny = sdf.shape
+    irregular_mask = np.zeros_like(sdf, dtype=bool)
+    crossing_count = np.zeros_like(sdf, dtype=np.int32)
+    centre_sign = np.sign(sdf)
+
+    for di, dj in stencil_offsets_diag:
+        if di == 0 and dj == 0:
+            continue
+        # Source cells: (i, j); shifted reads: (i+di, j+dj).
+        # The shift array maps (i, j) → SDF[i+di, j+dj].
+        i_src = slice(max(0, -di), Nx - max(0, di))
+        j_src = slice(max(0, -dj), Ny - max(0, dj))
+        i_dst = slice(max(0, di), Nx - max(0, -di))
+        j_dst = slice(max(0, dj), Ny - max(0, -dj))
+        tap_sign = np.sign(sdf[i_dst, j_dst])
+        ctr_sign = centre_sign[i_src, j_src]
+        crosses = (tap_sign * ctr_sign) < 0  # opposite signs
+        irregular_mask[i_src, j_src] |= crosses
+        crossing_count[i_src, j_src] += crosses.astype(np.int32)
+
+    return irregular_mask, crossing_count
+
+
+def rsg_diagonal_stencil_offsets(so):
+    """RSG diagonal stencil sample offsets at given SO.
+
+    The M2 RSG diagonal stencil at SO=8 uses 4 taps along each of the
+    (1, 1) and (1, -1) diagonals, at offsets m ∈ {-4, ..., +4}\\{0}.
+    Returns the union of (m, m) and (m, -m) offsets for m = 1..so//2.
+    """
+    half = so // 2
+    offsets = set()
+    for m in range(1, half + 1):
+        offsets.add((m, m))
+        offsets.add((-m, -m))
+        offsets.add((m, -m))
+        offsets.add((-m, m))
+    return sorted(offsets)
+
+
+def main():
+    print("=" * 70)
+    print("Tier 1A: ESIM irregular-cell geometry pipeline")
+    print("=" * 70)
+    print(f"Grid: Nx={NX}, Ny={NY} (dx={DX} km, extent {LX}×{LY} km)")
+    print(f"Interface anchor: x={ANCHOR_X*LX:.4f} km, y={INTERFACE_ANCHOR_Y_KM:.4f} km")
+    print()
+
+    x = np.linspace(0.0, LX, NX)
+    y = np.linspace(0.0, LY, NY)
+    X, Y = np.meshgrid(x, y, indexing='ij')
+
+    so = 8
+    stencil_offsets = rsg_diagonal_stencil_offsets(so)
+    print(f"RSG SO=8 diagonal stencil: {len(stencil_offsets)} taps")
+    print(f"  offsets (sample): {stencil_offsets[:8]}... up to ±4")
+    print()
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    for ax, dip_deg in zip(axes.flat, [0, 5, 20, 30]):
+        sdf = signed_distance_dipping_line(
+            X, Y, dip_deg,
+            anchor_x=ANCHOR_X * LX,
+            anchor_y=INTERFACE_ANCHOR_Y_KM,
+        )
+        irregular_mask, crossing_count = identify_irregular_cells(
+            sdf, stencil_offsets)
+        n_irreg = irregular_mask.sum()
+        max_cross = crossing_count.max()
+        print(f"dip={dip_deg:3d}°: {n_irreg:6d} irregular cells "
+              f"({100*n_irreg/(NX*NY):.2f}% of grid); "
+              f"max crossings per cell = {max_cross}")
+
+        # Plot: imshow with mask overlay
+        im = ax.imshow(crossing_count.T, origin='lower',
+                       extent=(0, LX, 0, LY),
+                       cmap='viridis', vmin=0, vmax=8)
+        # Overlay the analytical interface line
+        x_line = np.linspace(0, LX, 200)
+        y_line = INTERFACE_ANCHOR_Y_KM - np.tan(np.radians(dip_deg)) * (
+            x_line - ANCHOR_X * LX)
+        valid = (y_line >= 0) & (y_line <= LY)
+        ax.plot(x_line[valid], y_line[valid], 'r-', linewidth=1.0,
+                alpha=0.6, label='analytic Γ')
+        ax.set_title(f"dip={dip_deg}°  "
+                     f"n_irreg={n_irreg} ({100*n_irreg/(NX*NY):.1f}%)")
+        ax.set_xlabel('x (km)')
+        ax.set_ylabel('y (km)')
+        plt.colorbar(im, ax=ax, label='# crossing taps')
+        ax.legend(loc='upper right', fontsize=8)
+
+    plt.suptitle(
+        f"ESIM Tier 1A — irregular cells for RSG SO=8 diagonal stencil\n"
+        f"Petrobras geometry, dx={DX*1000:g} m",
+        fontsize=11)
+    plt.tight_layout()
+    out_path = REPO / 'figures' / 'it_e_tier1a_irregular_cells.png'
+    out_path.parent.mkdir(exist_ok=True)
+    plt.savefig(out_path, dpi=110, bbox_inches='tight')
+    print(f"\nSaved: {out_path}")
+
+    # Sanity-check the irregular-band thickness
+    # At dip=0 (flat interface), the irregular band should be 2*half = 8 cells
+    # thick — the SO=8 stencil reaches ±4 cells in each diagonal direction.
+    print("\n--- Sanity check ---")
+    dip0_sdf = signed_distance_dipping_line(
+        X, Y, 0.0, ANCHOR_X * LX, INTERFACE_ANCHOR_Y_KM)
+    dip0_mask, _ = identify_irregular_cells(dip0_sdf, stencil_offsets)
+    band_thickness_y = dip0_mask.sum(axis=1).max()  # max y-thickness over all x
+    print(f"At dip=0° flat interface, max band thickness in y = "
+          f"{band_thickness_y} cells")
+    print(f"Expected: ~2*so/2 = {so} cells (diagonal reach × √2 projected to y)")
+
+
+if __name__ == '__main__':
+    main()
+
+ succeeded in 0ms:
+                       shape=(packed.n_cells, sc),
+                       dtype=np.float64)
+
+    # 4. Build Eqs (one per c_out)
+    if verbose:
+        print(f"Building {sc} Eqs (one per c_out)...")
+    t0 = time.time()
+    eqs = []
+    for c_out in range(sc):
+        expr = U_star[cell_id, c_out]
+        for c_in in range(sc):
+            for off in range(n_offsets):
+                di_val = int(offset_alphabet[off, 0])
+                dj_val = int(offset_alphabet[off, 1])
+                expr = expr + (
+                    N[cell_id, c_out, c_in, off]
+                    * U_funcs[c_in][ti[cell_id] + di_val,
+                                     tj[cell_id] + dj_val]
+                )
+        eqs.append(Eq(U_star[cell_id, c_out], expr,
+                       implicit_dims=(cell_id,)))
+    if verbose:
+        print(f"  Eq-build time: {time.time() - t0:.2f}s "
+              f"({sc} eqs × {sc * n_offsets} terms each)")
+
+    # 5. Compile Operator
+    if verbose:
+        print("Compiling Operator...")
+    t0 = time.time()
+    op = Operator(eqs, name='esim_apply')
+    if verbose:
+        print(f"  Compile time: {time.time() - t0:.2f}s")
+
+    return DevitoESIMApply(
+        grid=grid,
+        n_cells=packed.n_cells,
+        n_offsets=n_offsets,
+        state_components=sc,
+        offset_alphabet=offset_alphabet,
+        op=op,
+        ti=ti, tj=tj,
+        N_coeffs=N,
+        U_funcs=U_funcs,
+        U_star=U_star,
+    )
+
+
+def main_smoke():
+    """End-to-end smoke check: Petrobras-scale Devito apply matches
+    the host-side einsum baseline to fp64.
+    """
+    from tier3_esim_precompute import precompute_esim_tables
+    from tier3_esim_storage import pack_esim_tables, apply_packed_einsum
+    from tier3_esim_projector import normal_and_tangent
+
+    print("=" * 70)
+    print("β.4.2 — production Devito apply: Petrobras-scale verification")
+    print("=" * 70)
+
+    Lx, Ly, dx = 6.0, 4.30, 0.005
+    dip_deg, anchor_x, anchor_y = 30.0, 3.0, 1.0
+    Nx = int(Lx / dx) + 1
+    Ny = int(Ly / dx) + 1
+
+    # Reduce to a subset to keep compile time bounded (Eq build for 5944
+    # cells × n_offsets ~ 50 means ~250 terms per Eq, manageable)
+    # CLI-overridable subset cap (None = full Petrobras grid)
+    max_cells = None
+    if len(sys.argv) > 1:
+        try:
+            max_cells = int(sys.argv[1])
+        except ValueError:
+            pass
+
+    print(f"\nStep 1 — Precompute ESIM tables "
+          f"(max_cells={max_cells if max_cells else 'all'})...")
+    t0 = time.time()
+    tables = precompute_esim_tables(
+        dip_deg=dip_deg, dx=dx, Lx=Lx, Ly=Ly,
+        anchor_x=anchor_x, anchor_y=anchor_y, k=2,
+        Vp_fluid=1.5, Vp_solid=3.0, Vs_solid=1.5,
+        rho_fluid=1.0, rho_solid=2.5,
+        max_cells=max_cells,
+        verbose=False,
+    )
+    packed = pack_esim_tables(tables)
+    print(f"  n_cells: {packed.n_cells}, n_B_max: {packed.n_B_max}")
+    print(f"  Total precompute time: {time.time() - t0:.2f}s")
+
+    print("\nStep 2 — Build Devito apply Operator...")
+    grid = Grid(shape=(Nx, Ny), extent=(Lx, Ly))
+    t0 = time.time()
+    devito_apply = build_devito_esim_apply(packed, grid, verbose=True)
+    print(f"  Total Devito setup time: {time.time() - t0:.2f}s")
+
+    print("\nStep 3 — Build plane-wave test field...")
+    _, t_vec = normal_and_tangent(dip_deg)
+    kappa = 2.0 * np.pi / 0.5
+    kx, ky = kappa * t_vec
+    rng = np.random.default_rng(seed=0)
+    X = np.linspace(0, Lx, Nx)
+    Y = np.linspace(0, Ly, Ny)
+    XX, YY = np.meshgrid(X, Y, indexing='ij')
+    p = np.cos(kx * (XX - anchor_x) + ky * (YY - anchor_y))
+    field = np.zeros((5, Nx, Ny))
+    field[0] = 0.5 * np.sin(kx * (XX - anchor_x))  # v_1 nontrivial
+    field[1] = 0.5 * np.cos(ky * (YY - anchor_y))  # v_2 nontrivial
+    field[2] = -p
+    field[3] = 0.1 * p
+    field[4] = -p
+
+    print("\nStep 4 — Apply Devito vs einsum baseline...")
+    # Devito apply (warm-up + timed). The first call may take much
+    # longer due to JIT linking of the (potentially large) compiled
+    # kernel — measure separately.
+    print("  Devito warm-up apply (first call, may include JIT link)...",
+          flush=True)
+    t0 = time.time()
+    devito_apply.apply(field)
+    t_warm = time.time() - t0
+    print(f"    warm-up: {t_warm:.2f}s", flush=True)
+    print("  Devito second apply (cached)...", flush=True)
+    t0 = time.time()
+    U_star_devito = devito_apply.apply(field)
+    t_devito = time.time() - t0
+    print(f"    cached: {t_devito * 1000:.2f}ms", flush=True)
+
+    # Einsum baseline
+    print("  Einsum baseline...", flush=True)
+    U_star_grid_einsum = apply_packed_einsum(packed, field)
+    # Convert einsum's grid output (5, Nx, Ny) at irregular cells to
+    # (n_cells, 5) layout for comparison
+    U_star_einsum_sub = np.zeros((packed.n_cells, 5))
+    for c in range(packed.n_cells):
+        i, j = packed.cell_target_ij[c]
+        U_star_einsum_sub[c] = U_star_grid_einsum[:, i, j]
+    t0 = time.time()
+    U_star_grid_einsum_2 = apply_packed_einsum(packed, field)
+    t_einsum = time.time() - t0
+
+    diff = U_star_devito - U_star_einsum_sub
+    max_abs = np.max(np.abs(diff))
+    max_rel = max_abs / max(np.max(np.abs(U_star_einsum_sub)), 1e-30)
+
+    print(f"\n  Devito apply (timed): {t_devito * 1000:.2f}ms")
+    print(f"  Einsum apply (timed): {t_einsum * 1000:.2f}ms")
+    print(f"  max |Devito - einsum|: {max_abs:.3e}")
+    print(f"  max relative:          {max_rel:.3e}")
+
+    if max_rel < 1e-12:
+        print("\nPASS — Devito production apply matches einsum to fp64.")
+        return 0
+    print(f"\nFAIL — relative error {max_rel:.3e} exceeds 1e-12.")
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main_smoke())
+
+exec
+/bin/zsh -lc 'rg -n "irregular|identify_irregular|cross|same|sdf" scripts/it_e_tier1_geometry.py scripts/run_rsg_bohlen_saenger_v2.py scripts/run_rsg_bohlen_saenger.py' in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+scripts/it_e_tier1_geometry.py:3:Identifies "irregular cells" in the Petrobras dipping water-TTI grid:
+scripts/it_e_tier1_geometry.py:4:cells whose RSG SO=8 diagonal-stencil taps cross the analytical
+scripts/it_e_tier1_geometry.py:9:  - Count of irregular cells per side
+scripts/it_e_tier1_geometry.py:12:    irregular set should be a thin horizontal band; at dip=30
+scripts/it_e_tier1_geometry.py:68:def identify_irregular_cells(sdf, stencil_offsets_diag):
+scripts/it_e_tier1_geometry.py:70:    mark the cell as irregular if SDF(i, j) and SDF(i+Δi, j+Δj) have
+scripts/it_e_tier1_geometry.py:74:        irregular_mask : (Nx, Ny) bool — True if ANY tap crosses interface
+scripts/it_e_tier1_geometry.py:75:        crossing_count : (Nx, Ny) int  — number of crossing taps per cell
+scripts/it_e_tier1_geometry.py:77:    Nx, Ny = sdf.shape
+scripts/it_e_tier1_geometry.py:78:    irregular_mask = np.zeros_like(sdf, dtype=bool)
+scripts/it_e_tier1_geometry.py:79:    crossing_count = np.zeros_like(sdf, dtype=np.int32)
+scripts/it_e_tier1_geometry.py:80:    centre_sign = np.sign(sdf)
+scripts/it_e_tier1_geometry.py:91:        tap_sign = np.sign(sdf[i_dst, j_dst])
+scripts/it_e_tier1_geometry.py:93:        crosses = (tap_sign * ctr_sign) < 0  # opposite signs
+scripts/it_e_tier1_geometry.py:94:        irregular_mask[i_src, j_src] |= crosses
+scripts/it_e_tier1_geometry.py:95:        crossing_count[i_src, j_src] += crosses.astype(np.int32)
+scripts/it_e_tier1_geometry.py:97:    return irregular_mask, crossing_count
+scripts/it_e_tier1_geometry.py:119:    print("Tier 1A: ESIM irregular-cell geometry pipeline")
+scripts/it_e_tier1_geometry.py:137:        sdf = signed_distance_dipping_line(
+scripts/it_e_tier1_geometry.py:142:        irregular_mask, crossing_count = identify_irregular_cells(
+scripts/it_e_tier1_geometry.py:143:            sdf, stencil_offsets)
+scripts/it_e_tier1_geometry.py:144:        n_irreg = irregular_mask.sum()
+scripts/it_e_tier1_geometry.py:145:        max_cross = crossing_count.max()
+scripts/it_e_tier1_geometry.py:146:        print(f"dip={dip_deg:3d}°: {n_irreg:6d} irregular cells "
+scripts/it_e_tier1_geometry.py:148:              f"max crossings per cell = {max_cross}")
+scripts/it_e_tier1_geometry.py:151:        im = ax.imshow(crossing_count.T, origin='lower',
+scripts/it_e_tier1_geometry.py:165:        plt.colorbar(im, ax=ax, label='# crossing taps')
+scripts/it_e_tier1_geometry.py:169:        f"ESIM Tier 1A — irregular cells for RSG SO=8 diagonal stencil\n"
+scripts/it_e_tier1_geometry.py:173:    out_path = REPO / 'figures' / 'it_e_tier1a_irregular_cells.png'
+scripts/it_e_tier1_geometry.py:178:    # Sanity-check the irregular-band thickness
+scripts/it_e_tier1_geometry.py:179:    # At dip=0 (flat interface), the irregular band should be 2*half = 8 cells
+scripts/it_e_tier1_geometry.py:182:    dip0_sdf = signed_distance_dipping_line(
+scripts/it_e_tier1_geometry.py:184:    dip0_mask, _ = identify_irregular_cells(dip0_sdf, stencil_offsets)
+scripts/run_rsg_bohlen_saenger_v2.py:105:                out[ix, :] = np.convolve(v[ix, :], kernel, mode='same')
+scripts/run_rsg_bohlen_saenger.py:7:§40e cross-check claims RSG's 45° X-mode is "literature-consistent
+scripts/run_rsg_bohlen_saenger.py:86:                out[ix, :] = np.convolve(v[ix, :], kernel, mode='same')
+scripts/run_rsg_bohlen_saenger.py:93:                out[ix, :] = np.convolve(vinv[ix, :], kernel, mode='same')
+
+web search: 
+web search: Devito automated finite difference computation DOI 10.1145/3374916 ...
+web search: 
+web search: 
+web search: 
+web search: 
+web search: 
+web search: 10.1016/j.jcp.2003.09.024 Lombard Piraux Numerical treatment two-dimensional interfaces acoustic elastic waves
+codex
+For the sparse step, I’m also checking a local synthetic CSR matvec at the stated 3M-nnz scale. The exact Petrobras sparsity will differ, but this gives a useful sanity bound for whether plain SciPy is in the right performance class.
+exec
+/bin/zsh -lc "python - <<'PY'
+import numpy as np, scipy.sparse as sp, time, os
+m = 60000
+n = 5_200_000
+nnz_per_row = 50
+nnz = m * nnz_per_row
+rng = np.random.default_rng(0)
+indptr = np.arange(0, nnz + 1, nnz_per_row, dtype=np.int64)
+indices = rng.integers(0, n, size=nnz, dtype=np.int32)
+data = rng.standard_normal(nnz).astype(np.float64)
+A = sp.csr_matrix((data, indices, indptr), shape=(m, n))
+x = rng.standard_normal(n).astype(np.float64)
+# warmup
+y = A @ x
+times=[]
+for _ in range(10):
+    t0=time.perf_counter(); y=A @ x; times.append(time.perf_counter()-t0)
+print('csr nnz', A.nnz, 'shape', A.shape)
+print('times_ms', [round(t*1e3,3) for t in times])
+print('median_ms', round(float(np.median(times))*1e3,3))
+print('effective_gflops', round((2*A.nnz)/float(np.median(times))/1e9,3))
+print('thread_env', {k:os.environ.get(k) for k in ['OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','VECLIB_MAXIMUM_THREADS']})
+PY" in /Users/ggorman/projects/reviews
+ succeeded in 572ms:
+csr nnz 3000000 shape (60000, 5200000)
+times_ms [10.43, 10.919, 10.302, 10.527, 10.964, 11.642, 10.632, 10.69, 10.625, 10.394]
+median_ms 10.628
+effective_gflops 0.565
+thread_env {'OMP_NUM_THREADS': None, 'MKL_NUM_THREADS': None, 'OPENBLAS_NUM_THREADS': None, 'VECLIB_MAXIMUM_THREADS': None}
+
+exec
+/bin/zsh -lc "python - <<'PY'
+import numpy as np, scipy.sparse as sp, time
+mb = 12000
+nb = 1_040_000
+blocks_per_row = 10
+nnzb = mb * blocks_per_row
+rng = np.random.default_rng(1)
+indptr = np.arange(0, nnzb + 1, blocks_per_row, dtype=np.int64)
+indices = rng.integers(0, nb, size=nnzb, dtype=np.int32)
+data = rng.standard_normal((nnzb,5,5)).astype(np.float64)
+A = sp.bsr_matrix((data, indices, indptr), shape=(mb*5, nb*5))
+x = rng.standard_normal(nb*5).astype(np.float64)
+y=A@x
+times=[]
+for _ in range(10):
+    t0=time.perf_counter(); y=A@x; times.append(time.perf_counter()-t0)
+print('bsr scalar nnz', A.nnz, 'block nnz', nnzb, 'shape', A.shape)
+print('times_ms', [round(t*1e3,3) for t in times])
+print('median_ms', round(float(np.median(times))*1e3,3))
+print('effective_gflops', round((2*A.nnz)/float(np.median(times))/1e9,3))
+PY" in /Users/ggorman/projects/reviews
+ succeeded in 434ms:
+bsr scalar nnz 3000000 block nnz 120000 shape (60000, 5200000)
+times_ms [3.84, 3.148, 2.848, 2.501, 2.464, 2.698, 2.864, 2.434, 2.412, 2.629]
+median_ms 2.663
+effective_gflops 2.253
+
+exec
+/bin/zsh -lc "python - <<'PY'
+import numpy as np, scipy.sparse as sp, time
+mb = 12000
+nb = 1_040_000
+blocks_per_row = 41
+nnzb = mb * blocks_per_row
+rng = np.random.default_rng(2)
+indptr = np.arange(0, nnzb + 1, blocks_per_row, dtype=np.int64)
+# locally clustered-ish columns: random base plus offsets, clipped/modded
+base = rng.integers(0, nb, size=mb, dtype=np.int64)
+offsets = np.arange(blocks_per_row) - blocks_per_row//2
+indices = ((base[:,None] + offsets[None,:]) % nb).astype(np.int32).ravel()
+data = rng.standard_normal((nnzb,5,5)).astype(np.float64)
+A = sp.bsr_matrix((data, indices, indptr), shape=(mb*5, nb*5))
+x = rng.standard_normal(nb*5).astype(np.float64)
+y=A@x
+times=[]
+for _ in range(8):
+    t0=time.perf_counter(); y=A@x; times.append(time.perf_counter()-t0)
+print('bsr scalar nnz', A.nnz, 'block nnz', nnzb, 'shape', A.shape)
+print('times_ms', [round(t*1e3,3) for t in times])
+print('median_ms', round(float(np.median(times))*1e3,3))
+print('effective_gflops', round((2*A.nnz)/float(np.median(times))/1e9,3))
+PY" in /Users/ggorman/projects/reviews
+ succeeded in 534ms:
+bsr scalar nnz 12300000 block nnz 492000 shape (60000, 5200000)
+times_ms [7.485, 6.939, 6.506, 6.304, 6.415, 6.336, 6.539, 6.356]
+median_ms 6.46
+effective_gflops 3.808
+
+web search: 
+web search: SciPy bsr_matrix block sparse row matrix documentation dot
+web search: 
+web search: https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.bsr_matrix.html
+web search: 
+web search: 
+web search: 
+web search: https://docs.nvidia.com/cuda/cusparse/index.html
+web search: 
+web search: 
+codex
+1. **Q1a**  
+VERDICT: AGREE. The identity is correct: for a linear row operator \(H_M(U)=A_M U + b_M\), the difference is \(H_M(\tilde U)-H_M(U)=A_M(\tilde U-U)\), and any additive source term cancels. Same-side stencil legs have \(\tilde U=U^n\), so only cross-interface legs contribute. This remains true for the RSG elastic update because the velocity and stress equations are linear combinations of old state components with fixed coefficients. Algorithm recommendation: assemble the correction rows directly from the same bulk stencil weights, using `U* - U^n` only on cross-Γ legs. This matches the LP04 read-substitution view in Lombard & Piraux 2004, DOI [10.1016/j.jcp.2003.09.024](https://www.sciencedirect.com/science/article/pii/S0021999103005126).
+
+2. **Q1b**  
+VERDICT: AGREE. Bulk-then-add is algebraically identical to a read-time LP04 operator as long as the correction is computed from the old time slice \(U^n\), not from the post-bulk \(U^{n+1}\). A non-irregular target row has no cross-Γ stencil legs by definition, so LP04 and bulk are identical for that row even if one of its source cells is itself irregular for its own update. If a target cell \(N\) reads a source cell \(M\) on the opposite side, then \(N\)'s stencil crosses Γ, so \(N\) is an irregular row and gets its own \(\Delta_N\). The source cell being irregular is not the criterion; the target row’s read geometry is. Algorithm recommendation: correct all and only target rows whose stencil support crosses Γ, on both sides of the interface, then scatter-add into `U.forward` at those target rows.
+
+3. **Q2a**  
+VERDICT: AGREE. Use an SVD-based SciPy solve with explicit rank control, not `numpy.linalg.pinv` defaults and not ridge as the primary method. The best recipe is `scipy.linalg.lstsq(M_scaled, I, cond=1e-10, lapack_driver="gelsd")`, or equivalently `scipy.linalg.pinv(..., rtol=1e-10, return_rank=True)`, with column scaling of the Taylor basis before the solve and unscaling afterward. SciPy documents that `lstsq` uses the `cond * largest_singular_value` cutoff for effective rank and returns both `rank` and singular values; `gelsd` is the default recommended driver ([SciPy lstsq docs](https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.lstsq.html)). `rtol=1e-10` is a good production cutoff here: it leaves median \(cond(M)\approx 10^5\) cells untouched and rejects modes that would amplify fp64 roundoff by \(10^{10}\). The \(cond(M)\approx 4.5\times10^{16}\) edge cells are numerically rank-deficient in double precision; skip them, enlarge/recenter \(B\), or locally reduce \(k\), rather than pretending a stable inverse exists. Tikhonov can be a diagnostic fallback, but it biases the LP04 projector and should not replace rank-based rejection. Current workspace versions checked: NumPy 2.3.3, SciPy 1.15.3; NumPy’s default `pinv` cutoff is still `1e-15`, which is too permissive for these edge cells ([NumPy pinv docs](https://numpy.org/doc/stable/reference/generated/numpy.linalg.pinv.html)).
+
+4. **Q2b**  
+VERDICT: AGREE. The right production path is CPU sparse/block-sparse correction beside the CPU Devito bulk operator; do not move this to GPU unless the whole Devito timestep is already GPU-resident. Because the state is naturally 5-component, store both \(N\) and \(C\) as BSR with blocksize `(5,5)` and cell-major flattening, not scalar CSR first; SciPy explicitly recommends BSR for sparse matrices with dense submatrices ([SciPy BSR docs](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.bsr_matrix.html)). On this workspace, a synthetic 3M-scalar-nnz BSR matvec ran at ~2.7 ms median, while scalar CSR was ~10.6 ms, so BSR is the better first implementation. If BSR SciPy misses the <10 ms budget once both \(N\) and \(C\) are included, move to oneMKL Sparse BLAS `mkl_sparse_d_mv` with preallocated buffers and fixed sparsity ([Intel oneMKL docs](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2023-1/mkl-sparse-mv.html)). cuSPARSE is excellent but only wins if vectors already live on device; its `cusparseSpMV` supports CSR/BSR and preprocessing for repeated patterns, but host-device transfer would dominate in a CPU Devito loop ([NVIDIA cuSPARSE docs](https://docs.nvidia.com/cuda/cusparse/index.html)). Avoid hand AVX512 until profiling proves oneMKL/BSR cannot meet budget; if needed, hand-tune the fixed 5×5 block kernel, not generic CSR.
+
+SUMMARY: Implement ESIM as a stationary precomputed sparse/block-sparse correction operator, with SVD-rank-filtered projector tables and CPU BSR/MKL matvecs after each bulk Devito step.  
+VERDICT: AGREE
+tokens used
+204,477
+
+
+[2] gemini --skip-trust -p -  (162.4s, exit=0, verdict=AGREE)
+    output saved: /tmp/review_pool_1779893348_02_gemini_skiptrust_p_.txt
+**Q1a — Correction-term decomposition (math)**
+- VERDICT: AGREE
+- Justification: The finite-difference operator $H$ for the linear elastic wave equation on a rotated-staggered-grid is strictly a linear combination of field values from neighboring nodes. Because $H$ is a linear operator, the principle of superposition applies directly: $H(\tilde{U}) = H(U^n + (\tilde{U} - U^n)) = H(U^n) + H(\tilde{U} - U^n)$. Here, $\tilde{U}$ represents the modified field where cross-interface points are replaced by their LP04 extrapolated values $U^*$, and $U^n$ is the unmodified field. The term $H(U^n)$ is exactly the output of the standard bulk Devito operator. Therefore, the correction term $\Delta_M = H(\tilde{U} - U^n)$ reduces to a sparse sum over only the cross-interface stencil legs, perfectly capturing the required LP04 modification without altering the bulk evaluation.
+- Recommendation: Implement the correction as a sparse matrix-vector product that computes $\Delta_M$ by linearly combining $(U^* - U^n)$ at cross-interface legs, using the exact stencil weights from the RSG operator.
+- Citations: Lombard & Piraux (2004), DOI: 10.1016/j.jcp.2003.09.024.
+
+**Q1b — Bulk operator + post-hoc correction equivalence**
+- VERDICT: AGREE
+- Justification: At any given cell $N$, the bulk operator always computes $H_N(U^n)$. If $N$ is a regular cell (its stencil does not cross the interface $\Gamma$), then by definition $\tilde{U} = U^n$ for all nodes in its stencil. Consequently, the correction term $\Delta_N = H_N(\tilde{U} - U^n) = 0$, meaning the bulk operator's result is already exact and requires no modification. If $N$ is an irregular cell (its stencil crosses $\Gamma$), it incorrectly reads the "wrong-side" physical values during the bulk update. The post-hoc addition of $\Delta_N$ exactly subtracts the contribution of these wrong-side $U^n$ values and adds the contribution of the LP04 extrapolated $U^*$ values. Because this correction is applied selectively and exclusively to all cells whose stencils cross $\Gamma$ (on both sides), the final state algebraically perfectly matches a hypothetical read-time LP04 substitution.
+- Recommendation: Use a two-pass approach each timestep: run the Devito bulk operator unmodified over the entire grid, then add the precomputed $\Delta_M$ correction vectors exclusively to the memory locations of the irregular cells.
+
+**Q2a — Numerical library choice for ill-conditioned pseudoinverse**
+- VERDICT: AGREE
+- Justification: For constructing the pseudo-inverse of the LP04 Taylor-fit matrix $M$, robustness against rank-deficiency at degenerate interface geometries is critical. Tikhonov regularization (ridge) introduces a spatial bias that can degrade the formal polynomial accuracy of the ESIM method, making it suboptimal for this application. Instead, truncated SVD provides a mathematically sharp cutoff that preserves accuracy in well-conditioned directions while safely discarding noise from degenerate cell configurations. Using LAPACK's divide-and-conquer SVD (`gelsd`) efficiently computes the least-squares solution while simultaneously returning the effective rank. This rank information allows you to programmatically detect and flag severely ill-conditioned cells (e.g., the 4 edge cells) rather than relying on brittle topological heuristics like minimum points-per-side.
+- Recommendation: Use `scipy.linalg.lstsq` with an explicit `rcond=1e-10` (or `rcond=None` for machine precision scaling). Utilize the returned `rank` to dynamically identify degenerate points (where rank < required unknowns) and systematically drop them or fall back to a lower-order polynomial fit.
+- Citations: `scipy.linalg.lstsq` (SciPy v1.11+), wrapping LAPACK `gelsd`.
+
+**Q2b — Per-timestep SpMV at production**
+- VERDICT: AGREE
+- Justification: The correction SpMV involves applying a ~3M non-zero sparse matrix at each of the 8800 timesteps. While Devito is highly optimized for OpenMP CPU execution, injecting a pure SciPy `csr_matrix.dot` call mid-timestep will introduce Python overhead and may bottleneck on single-threaded execution depending on the underlying BLAS linkage. Since the correction logic operates purely on flattened Devito tensor data, writing a custom Numba JIT-compiled function perfectly complements Devito's architecture. A Numba SpMV loop can directly iterate over the irregular cells in parallel using OpenMP, avoiding data copies and external library dependencies. Given the tight <10 ms budget, a memory-bandwidth-bound Numba kernel will comfortably execute the 3M NNZ operations in a fraction of a millisecond on modern CPUs.
+- Recommendation: Implement the SpMV correction using Numba (`@njit(parallel=True, fastmath=True)`). Pass the Devito array data pointers and precomputed CSR arrays directly into the Numba kernel to ensure zero-overhead, multi-threaded CPU execution that perfectly matches Devito's threading model.
+- Citations: `numba` (v0.58+).
+
+SUMMARY: Decomposing the ESIM substitution into a bulk Devito update and a Numba-accelerated sparse linear correction is mathematically exact, avoids JIT compilation stalls, and provides a highly performant architecture when precomputed with SciPy's rank-revealing least-squares solver.
+VERDICT: AGREE
+Ripgrep is not available. Falling back to GrepTool.
+MCP issues detected. Run /mcp list for status.
+API returned invalid content after all retries. Full report available at: /var/folders/wz/39jh6yrs0wb1q26n_lcjxx8w0000gp/T/gemini-client-error-generateJson-invalid-content-2026-05-27T14-51-15-252Z.json Error: Retry attempts exhausted
+    at retryWithBackoff (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:270882:9)
+    at async BaseLlmClient._generateWithRetry (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:271034:14)
+    at async BaseLlmClient.generateJson (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:270932:21)
+    at async NumericalClassifierStrategy.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319681:28)
+    at async CompositeStrategy.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319752:26)
+    at async ModelRouterService.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319915:18)
+    at async GeminiClient.processTurn (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:307625:24)
+    at async GeminiClient.sendMessageStream (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:307740:14)
+    at async file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/gemini-YQATFAPB.js:10880:26
+    at async main (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/gemini-YQATFAPB.js:16237:5)
+[Routing] NumericalClassifierStrategy failed: Error: Failed to generate content: Retry attempts exhausted
+    at BaseLlmClient._generateWithRetry (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:271064:13)
+    at async BaseLlmClient.generateJson (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:270932:21)
+    at async NumericalClassifierStrategy.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319681:28)
+    at async CompositeStrategy.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319752:26)
+    at async ModelRouterService.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319915:18)
+    at async GeminiClient.processTurn (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:307625:24)
+    at async GeminiClient.sendMessageStream (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:307740:14)
+    at async file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/gemini-YQATFAPB.js:10880:26
+    at async main (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/gemini-YQATFAPB.js:16237:5)
+
+
+==> Combined verdict: AGREE ('codex exec --skip-git-repo-check -'=AGREE  'gemini --skip-trust -p -'=AGREE)

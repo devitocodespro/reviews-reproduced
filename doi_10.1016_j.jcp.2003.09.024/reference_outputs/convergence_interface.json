@@ -1,0 +1,78 @@
+{
+  "config": {
+    "L_x": 0.1,
+    "interface_y": 0.05,
+    "T_end_periods": 0.15,
+    "border_cells": 6,
+    "medium": {
+      "c_f": 1500.0,
+      "rho_f": 1000.0,
+      "c_p": 4000.0,
+      "c_s": 2000.0,
+      "rho_s": 2600.0,
+      "omega": 314159.2653589793
+    }
+  },
+  "sweep": [
+    {
+      "Nx": 60,
+      "dx": 0.0016666666666666668,
+      "dt": 1.1538461538461539e-07,
+      "n_steps": 26,
+      "T_end": 3e-06,
+      "n_irregular_cells": 120,
+      "L_inf": 1928.745447257294,
+      "L_1": 92.71069765591174,
+      "setup_s": 0.2580599784851074,
+      "step_s": 0.06982207298278809,
+      "border_cells": 6,
+      "L_inf_at_component": 4,
+      "L_inf_at_ij": [
+        18,
+        29
+      ],
+      "L_inf_dist_to_interface_cells": 1
+    },
+    {
+      "Nx": 100,
+      "dx": 0.001,
+      "dt": 6.976744186046512e-08,
+      "n_steps": 43,
+      "T_end": 3e-06,
+      "n_irregular_cells": 200,
+      "L_inf": 2648.7506736069768,
+      "L_1": 91.78352579285092,
+      "setup_s": 0.4091377258300781,
+      "step_s": 0.2079780101776123,
+      "border_cells": 6,
+      "L_inf_at_component": 4,
+      "L_inf_at_ij": [
+        74,
+        49
+      ],
+      "L_inf_dist_to_interface_cells": 1
+    },
+    {
+      "Nx": 150,
+      "dx": 0.0006666666666666668,
+      "dt": 4.6875e-08,
+      "n_steps": 64,
+      "T_end": 3e-06,
+      "n_irregular_cells": 300,
+      "L_inf": 4300.039131751981,
+      "L_1": 102.58970489541944,
+      "setup_s": 0.612421989440918,
+      "step_s": 0.47888994216918945,
+      "border_cells": 6,
+      "L_inf_at_component": 4,
+      "L_inf_at_ij": [
+        89,
+        74
+      ],
+      "L_inf_dist_to_interface_cells": 1
+    }
+  ],
+  "order_L_inf": -0.8641923165520802,
+  "order_L_1": -0.10496497524956103,
+  "paper_reference": "Lombard & Piraux 2004 JCP 195 Table 2"
+}

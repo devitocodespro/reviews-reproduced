@@ -1,0 +1,625 @@
+==> review-pool: submitting prompt to 2 reviewer(s) in parallel:
+    [1] codex exec --skip-git-repo-check -
+    [2] gemini --skip-trust -p -
+
+[1] codex exec --skip-git-repo-check -  (150.1s, exit=0, verdict=AGREE)
+    output saved: /tmp/review_pool_1779880990_01_codex_exec_skipgitrepocheck_.txt
+1. **Q1. Precompute Strategy**
+
+VERDICT: DISAGREE
+
+Precomputing `G_i^k`, `K_i^k`, `Mbar^-1`, and compact per-case ESIM rows on the host is right, but doing every timestep gather/dot/inject through Python/NumPy is not the clean production decomposition for Devito. It will be fragile for MPI, poor for GPU, and likely dominated by Python synchronization even if the interface band is small. I would instead precompute topology and coefficients on the host, then store them in Devito `Function`/indexed auxiliary arrays and compute the modified values inside compiled Devito code over a narrow irregular band or sparse custom dimension. A fully symbolic “one giant stencil with SubDomain + conditional masks + dot products” is possible in spirit but not elegant: it risks code bloat and branch-heavy loops in the main RSG operator. The better split is: regular RSG operator stays clean; a small compiled ESIM correction/fill operator computes auxiliary modified values; the irregular-band stencil reads from those auxiliaries. This preserves the Lombard-Piraux ESIM idea of local modified values while staying compatible with Devito’s generated-code model ([10.1016/j.jcp.2003.09.024](https://doi.org/10.1016/j.jcp.2003.09.024), [10.1016/S0165-2125(99)00023-2](https://doi.org/10.1016/S0165-2125(99)00023-2)).
+
+2. **Q2. Stencil Substitution Mechanics**
+
+VERDICT: AGREE
+
+Yes, for RSG you should think in terms of oriented cross-interface stencil reads, not just irregular grid points. A single physical grid point can require different modified values depending on which side’s smooth extension is being used, which field component is being read, and which staggered location/operator is asking for it. For SO=8 RSG, the relevant object is therefore closer to `O(crossing stencil legs)` than `O(irregular points)`, though you can deduplicate by keying on `(target_index, source_side, component, stagger_location, projection_case)`. Do not use `SparseFunction` as the primary mechanism unless you only need a quick prototype; its interpolation/injection semantics are a poor fit for replacement values in grid-aligned stencil reads. Prefer per-leg or per-side auxiliary `Function`s filled before the main update, then use masked equations only on the irregular band, not branches across the whole domain. MPI requires the auxiliary values to be computed for local stencil needs including halo-adjacent legs, with halo exchange or redundant halo-band computation handled deliberately. This is exactly the “same operator, modified values for crossing legs” structure of ESIM Eq. 43-44, but RSG makes the bookkeeping leg-oriented.
+
+3. **Q3. Order-k Choice**
+
+VERDICT: INCONCLUSIVE
+
+For the final Tier 3 target, matching ESIM order to the production stencil is the defensible numerical design: if the RSG scheme is SO=8, use an ESIM order high enough that the interface treatment is not the formal bottleneck. The literature precedent is not “always use k=8”; it is “choose the interface reconstruction order consistently with the base scheme if you want to preserve the scheme order near irregular points.” Piraux-Lombard’s 1D ESIM and Lombard-Piraux’s 2D acoustic/elastic ESIM state this preservation goal ([10.1006/jcph.2001.6696](https://doi.org/10.1006/jcph.2001.6696), [10.1016/j.jcp.2003.09.024](https://doi.org/10.1016/j.jcp.2003.09.024)); later ESIM work coupled the method to high-order schemes such as WENO/ADER with order compatibility as the governing principle ([10.1137/030601041](https://doi.org/10.1137/030601041), [10.1016/j.cam.2006.03.027](https://doi.org/10.1016/j.cam.2006.03.027)). That said, I would not start with k=8 for the first RSG implementation: it increases `Mbar` size, condition risk, component-mixing complexity, and debugging surface. Start with k=2 or k=3 as a feasibility prototype, then run k-sweep `{2,4,6,8}` on the same diagnostic to see whether the 45-degree artifact is interface-condition error or high-order reconstruction error. If k=2 kills the X-mode artifact but slightly degrades convergence, you have validated the architecture; if k=2 leaves high-frequency residue, then move upward.
+
+4. **Q4. Risks + Diagnostic Test**
+
+VERDICT: AGREE
+
+The highest-likelihood failure mode is not raw runtime overhead; it is wrong component/side/stagger bookkeeping in the fluid-solid ESIM right-hand side. RSG already relocates stress/velocity components in a nonstandard diagonal topology, and Lombard-Piraux fluid-solid ESIM explicitly mixes fluid and solid unknown sets, so a single off-by-half-cell, wrong-side extension, or missing traction/velocity compatibility term can create exactly the kind of four-lobed artifact you are trying to remove. The second risk is conditioning of `Mbar` as k and q grow, especially for oblique interface placements where the disk samples become geometrically unbalanced; this should be monitored with singular values and rank decisions per projection case. MPI halo behavior is a practical risk, but it is easier to isolate after a serial/local correctness test. The cheapest diagnostic before multi-day implementation is a frozen-field manufactured extension test: take an analytic plane/interface solution satisfying the fluid-solid jump conditions, build the RSG crossing-leg table for the 30-degree Petrobras interface, compute all `U*` for one timestep without advancing waves, and measure replacement error plus residual traction/normal-velocity jump on every crossing leg. This tests projection geometry, side logic, component ordering, `Mbar` conditioning, and SO=8 leg coverage without running a full solver. Bader-Almquist-Dunham’s SBP interface work is a useful comparator because it emphasizes explicit, stable acoustic-elastic coupling rather than treating the fluid as a degenerate solid ([10.1190/geo2022-0195.1](https://doi.org/10.1190/geo2022-0195.1)).
+
+SUMMARY: Implement Tier 3 as a two-stage compiled Devito design: host-precomputed ESIM topology/coefficient tables, Devito-side modified-value fill over the crossing-leg band, then masked irregular-band RSG substitution using auxiliary arrays.
+
+VERDICT: AGREE
+OpenAI Codex v0.133.0
+--------
+workdir: /Users/ggorman/projects/reviews
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR] (network access enabled)
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019e692c-9cd7-73d3-9e3d-6f2d72fae65a
+--------
+user
+Architectural design review — Tier 3 ESIM implementation for the M2 RSG (Saenger 2000 rotated staggered grid) 45-degree X-mode interface artifact.
+
+═══════════════════════════════════════════════════════════════════════
+CONTEXT
+═══════════════════════════════════════════════════════════════════════
+
+A Devito-based elastic-wave solver using Saenger 2000 RSG on a 2D Petrobras seismic configuration (water layer over TTI elastic, dipping interface at theta in {0, 5, 20, 30} deg) produces a visible 45-degree X-mode diffraction artifact concentrated at the dipping fluid-solid interface. The artifact appears as 4-petal lobes at the source-near-field and 4-5 ghost wavefronts at later times. hf_ratio at dip=30 deg is ~9.8e-3 (vs ~2.1e-3 for clean methods like SSG-Yee and Irakarama 2026 Dual-Pair).
+
+Multi-week empirical bisection has confirmed the artifact is ARCHITECTURAL — generated by the colocated diagonal-stencil x discontinuous-interface coupling — and CANNOT be addressed by:
+
+ - stencil truncation order (SO sweep {4,8,12,16} — invariant)
+ - time-stepping coupling (CFL sweep {0.1,0.2,0.3,0.4} — DAI fp64-invariant)
+ - effective-medium averaging at the interface (BS04 -6%, Moczo 2002 -7%, Kristek 2017 +36% worse, Jiang-Zhang 2021 +68% worse)
+ - source-stencil coupling (OumZhang 8-point recipe wired; §28b stale)
+ - SO bumping in M61 STO-RSG (carries identical artifact)
+
+Falsification diagnostic ✓ CONFIRMED interface origin: localised Cerjan damping at the irregular-cell band (those whose RSG SO=8 diagonal stencil crosses the analytical interface) drops hf_ratio by 84-91% (Tier 1B α=0.05). But DAI_curl inflates from 2.98 to 15+ — naive absorption is direction-asymmetric.
+
+Tier 2 (pair-mask zeroing of stencil legs that cross Γ, no jump-condition enforcement) is WORSE than baseline: hf_ratio increases 812% (8.97e-2), artifact_E increases 76000x. Pile-up reflections off the discontinuous zero-derivative band. Confirms: no shortcut exists; full jump-condition machinery is required.
+
+═══════════════════════════════════════════════════════════════════════
+LOMBARD-PIRAUX 2004 ESIM RECIPE (paper-faithful transcription complete)
+═══════════════════════════════════════════════════════════════════════
+
+DOI 10.1016/j.jcp.2003.09.024. Just bootstrapped at reviews-reproduced/doi_10.1016_j.jcp.2003.09.024/ with 21/21 paper-faithfulness pytest assertions. Master equation (Eq 42):
+
+  U*_{I,J} = Pi_{I,J}^k . G_1^k . K_1^k . Mbar^-1 . (U^n)_B
+
+where for an irregular point (I,J) in Omega_2 (across-interface from the fluid),
+ - Pi_{I,J}^k : Taylor row vector at (x_I - x_P, y_J - y_P) of order k
+ - G_1^k : compatibility matrix Eq 25 (fluid vorticity reduction)
+ - K_1^k : SVD nullspace of L_1^k.G_1^k boundary-condition matrix
+ - Mbar^-1 : restriction of M^-1 to the W_1^k rows; M is the over-determined Taylor-fit matrix (Eq 38) built by stacking Eq 35 rows on B_1 and Eq 37 rows on B_2
+ - (U^n)_B : numerical values gathered from the disk B of radius q ~ 3.5 dx around the orthogonal projection P of (I,J) onto Γ
+
+Time-stepping at irregular points (Eq 43-44): apply the same discrete operator H as at regular points, but substitute U*_{i+α,j+β} for stencil legs that cross Γ (different medium from (i,j)), and keep U^n_{i+α,j+β} for same-side legs.
+
+DIPPING-LINE SIMPLIFICATION (Petrobras-specific):
+ - Γ is a single straight line ⇒ n, t, α_1, α_2 are constant
+ - SVDs of L_i^k G_i^k and S_i^k computed ONCE at setup
+ - Mbar^-1 depends only on integer cell offset of B relative to P
+ - Per-irregular-point precomputed row vector:
+     N_{I,J} := Pi_{I,J}^k . G_1^k . K_1^k . Mbar^-1
+   → per-step cost is one mat-vec U*_{I,J} = N_{I,J} . (U^n)_B
+   → paper §3.9 reports ~1% overhead at 400x400
+
+═══════════════════════════════════════════════════════════════════════
+QUESTIONS — Tier 3 IMPLEMENTATION DESIGN
+═══════════════════════════════════════════════════════════════════════
+
+Q1. PRECOMPUTE STRATEGY. The paper's recipe precomputes (G_i^k, K_i^k, Mbar^-1) at setup time and stores the per-irregular-point row vectors N_{I,J} as a NumPy array on the host. At each Devito timestep, we (a) gather (U^n)_B values from the stress fields via halo reads, (b) compute U*_{I,J} = N · (U^n)_B as a host-side dot product, (c) inject U* values into the Devito stencil at the right positions for Eq 43-44 substitution. Is this the cleanest decomposition, or is there a more elegant Devito-native approach? Specifically: does it make sense to express the whole substitution rule symbolically within a Devito Operator (via SubDomain + conditional mask + custom stencil), avoiding the host roundtrip entirely?
+
+Q2. STENCIL SUBSTITUTION MECHANICS. RSG's diagonal-stencil reads stress tensor values at (i±1, j±1) corners. For a given irregular point (I,J), Eq 43 requires: if Ω(I+α, J+β) ≠ Ω(I,J), substitute the modified value U*_{I+α, J+β} computed via Eq 42 (using a DIFFERENT P projection per (α,β) pair, since each stencil leg might have its own near-Γ projection). Does this mean we need O(stencil_legs × irregular_points) modified values per timestep, not just O(irregular_points)? How should the Devito stencil express this substitution — via masked Eq's with a per-leg branch, via halo injection of U* arrays before each timestep, or via SparseFunction-based injection?
+
+Q3. ORDER-k CHOICE. Paper §3.10 establishes that the ESIM preserves order min(k, scheme_order) near the interface. RSG is SO=8 in our production. k=2 (the paper's default) gives an O(dx^3) modified-value extrapolation. For RSG SO=8, should we use k=8 (matching scheme order — costs more setup, larger Mbar) or accept k=2 (cheaper, formally drops near-interface accuracy to 3rd order but the rest of the domain stays 8th)? Cite literature precedent for "ESIM matching order" choices in production solvers if available.
+
+Q4. RISKS + DIAGNOSTIC TEST. The paper claims ~1% runtime overhead, but that's for a simple acoustic/elastic Cartesian configuration. For RSG (multiple staggered fields, TTI Cij coupling, diagonal stencil topology), what's the highest-likelihood failure mode of a straightforward implementation? Examples to consider: ill-conditioned Mbar (radius q too small), accuracy degradation when stencil legs cross Γ at oblique angles relative to the grid, MPI halo-exchange interaction with the cross-interface stencil reads, fluid-solid component-mixing in (U^n)_B (paper §3.6 notes the right-hand side mixes 3-component fluid + 5-component solid values for fluid-solid configurations). Recommend the SINGLE cheapest diagnostic test we could run BEFORE committing to multi-day implementation to confirm the design works at all.
+
+═══════════════════════════════════════════════════════════════════════
+OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════════════
+
+Four numbered sections (Q1-Q4). Each section:
+ - opens with VERDICT: AGREE | DISAGREE | INCONCLUSIVE (relative to the proposed approach in the question)
+ - then 4-8 sentences of justification, specific to RSG + Devito
+ - cites DOIs where applicable (Lombard-Piraux 2004 = 10.1016/j.jcp.2003.09.024; Saenger 2000 = 10.1016/S0165-2125(99)00023-2; Bader-Almquist-Dunham 2023 = 10.1190/geo2022-0195.1; Piraux-Lombard 2001 etc.)
+
+End with two lines:
+SUMMARY: <one-sentence overall recommendation for the Tier 3 implementation path>
+VERDICT: <AGREE | DISAGREE | INCONCLUSIVE>
+
+codex
+I’ll use the Devito skill for the solver-implementation angle and the paper-lookup guidance only for DOI-backed precedent, then keep the answer constrained to the four requested design decisions.
+exec
+/bin/zsh -lc "sed -n '1,220p' /Users/ggorman/projects/devito-skill/SKILL.md" in /Users/ggorman/projects/reviews
+exec
+/bin/zsh -lc "sed -n '1,200p' /Users/ggorman/.agents/skills/paper-lookup/SKILL.md" in /Users/ggorman/projects/reviews
+ succeeded in 0ms:
+---
+name: devito
+description: Use this skill when writing finite difference codes using Devito, a Python DSL for symbolic PDE specification and automatic code generation. Apply for (1) acoustic/elastic wave propagation and seismic modeling (RTM, FWI), (2) CFD simulations (convection, diffusion, Navier-Stokes, cavity flow), (3) heat diffusion and thermal problems, (4) any PDE-based simulation requiring optimized stencil computation, (5) MPI-parallel or GPU-accelerated PDE solvers, (6) source injection and receiver interpolation at arbitrary coordinates.
+---
+
+<!--
+Skill metadata:
+- Author: Gerard Gorman
+- License: https://github.com/devitocodes/devito/blob/main/LICENSE.md
+- Repository: https://github.com/devitocodes/devito
+-->
+
+# Devito - Finite Difference DSL for Symbolic PDE Computation
+
+## Overview
+
+Devito is a Python-based domain-specific language (DSL) and code generation framework for solving partial differential equations (PDEs) through symbolic computation. You write the math; Devito generates optimized C/C++ loops with automatic parallelization (OpenMP, MPI, GPU).
+
+## CRITICAL: Use Devito DSL, Not NumPy
+
+**Always generate Devito DSL code, not raw NumPy implementations.**
+
+The Devito example notebooks (especially in `examples/cfd/`) follow a pedagogical pattern:
+1. First, they show a **NumPy reference implementation** (manual loops, array slicing)
+2. Then, they show the **Devito DSL implementation** (symbolic, auto-optimized)
+
+When writing code with this skill, **always use the Devito DSL approach**:
+
+```python
+# BAD - NumPy manual loops (DO NOT generate this)
+for n in range(nt):
+    un = u.copy()
+    u[1:-1] = un[1:-1] + nu * dt / dx**2 * (un[2:] - 2*un[1:-1] + un[:-2])
+
+# GOOD - Devito DSL (ALWAYS generate this)
+from devito import Grid, TimeFunction, Eq, Operator
+grid = Grid(shape=(nx,), extent=(lx,))
+u = TimeFunction(name="u", grid=grid, time_order=1, space_order=2)
+eq = Eq(u.forward, u + nu * dt * u.dx2)
+Operator(eq)(time=nt, dt=dt)
+```
+
+**Why Devito DSL:**
+- Automatic C code generation with compiler optimizations
+- Automatic parallelization (OpenMP, MPI, GPU)
+- Symbolic derivatives (no manual stencil coding)
+- Dimension-agnostic code (same code works 1D/2D/3D)
+
+## CRITICAL: Update Equations Must Have Explicit LHS Assignment
+
+**Devito Operators require equations with an explicit assignable LHS (left-hand side).**
+
+The Operator compiles equations into C code. Each equation must tell Devito **what variable to update**. A symbolic PDE constraint like `Eq(u.dt2, c**2 * u.dx2)` does NOT work because it has no assignable target.
+
+```python
+# WRONG - Symbolic PDE form passed directly to Operator
+# This generates INVALID C code and fails to compile!
+pde = Eq(u.dt2, c**2 * u.dx2)
+op = Operator([pde])  # ERROR: "expression is not assignable"
+
+# CORRECT - Use solve() to derive update equation
+from devito import solve
+pde = Eq(u.dt2, c**2 * u.dx2)
+update = Eq(u.forward, solve(pde, u.forward))  # Explicit LHS: u.forward
+op = Operator([update])  # Works correctly
+
+# ALSO CORRECT - Manual stencil with explicit LHS
+update = Eq(u.forward, 2*u - u.backward + dt**2 * c**2 * u.dx2)
+op = Operator([update])  # Works correctly
+```
+
+**The Rule:** Every `Eq()` passed to `Operator()` must have a **single assignable symbol** on the LHS:
+- `u.forward` - next time step
+- `u[t+1, x, y]` - indexed access
+- `p` - static function update
+
+**Never pass** `Eq(u.dt2, ...)` or `Eq(u.dt, ...)` directly to an Operator.
+
+## CRITICAL: Use Proper Unit Scaling for Numerical Stability
+
+**Always scale quantities to O(1) to prevent floating-point catastrophe, especially for FP32/GPU.**
+
+Finite difference stencils are "catastrophic cancellation machines"—every derivative computation subtracts nearby values. When field values are large (e.g., pressure in Pascals ~10^6), the meaningful differences lose significant digits.
+
+### The Principle: Scale to O(1)
+
+This applies to **all domains**, not just seismic modeling. Make sensible unit choices based on your problem:
+
+| Domain | Sensible Choice | Poor Choice | Reasoning |
+|--------|----------------|-------------|-----------|
+| Seismic | km/s, km, g/cm³ | m/s, m, kg/m³ | Wave speeds 1-6 km/s become O(1) |
+| CFD | Normalize L=1, U=1, use Re | SI units directly | Reynolds number formulation |
+| Heat transfer | Normalize to ΔT=1, L=1 | Kelvin, meters | Dimensionless form |
+| Microfluidics | μm, μs | m, s | Characteristic scales are microscale |
+
+**The goal:** All coefficients in your discretized equations should be O(1), not 10^6 or 10^-6.
+
+```python
+# GOOD - Quantities scaled to O(1) for the problem at hand
+# Seismic example: km/s units
+grid = Grid(shape=(201, 201), extent=(2.0, 2.0))  # 2 km domain
+c = 1.5  # km/s
+
+# CFD example: normalized units
+grid = Grid(shape=(100, 100), extent=(1.0, 1.0))  # Unit domain
+Re = 100  # Reynolds number
+nu = 1.0 / Re  # Dimensionless viscosity
+
+# BAD - Large magnitude ratios cause precision loss
+c = 1500  # m/s when domain is in km → mixed scales
+pressure = 101325  # Pa when other quantities are O(1)
+```
+
+### Why This Matters
+
+- **FP32 has ~7 decimal digits** - magnitude ratios > 10^6 cause absorption/cancellation
+- **GPU computing uses FP32** - NVIDIA Tensor Cores: 125 TFLOP/s FP16 vs 7.8 TFLOP/s FP64
+- **Long simulations accumulate error** - 10^6 timesteps leaves only ~4 reliable digits in FP32
+
+**Rule of thumb:** Keep all quantities within 10^-3 to 10^3 for FP32 safety. Choose units that make this natural for your problem.
+
+See `references/units-numerical-precision.md` for detailed guidance on non-dimensionalization, unit verification with **pint** (recommended for development), and common scaling errors.
+
+## CRITICAL: Set `space_order` on All Functions Used Inside Derivatives
+
+**When a `Function` appears inside an expression that is subsequently differentiated, it MUST have `space_order` matching the intended FD accuracy.** Otherwise Devito silently uses a low-order, asymmetric stencil that produces wrong results or numerical instability.
+
+```python
+# BAD — C defaults to space_order=1, corrupts the composed derivative
+C = Function(name='C', grid=grid)  # space_order=1 by default!
+u = TimeFunction(name='u', grid=grid, space_order=8)
+rhs = (C * u.dx).dx  # Uses fd_order=1 for outer .dx — UNSTABLE
+
+# GOOD — C has matching space_order
+C = Function(name='C', grid=grid, space_order=8)
+u = TimeFunction(name='u', grid=grid, space_order=8)
+rhs = (C * u.dx).dx  # Uses fd_order=8 — correct
+```
+
+This affects **any composed derivative** pattern: `(C * u.dx).dx`, `(C * u.dy).dy`, divergence of stress from Hooke's law, etc. It does NOT affect `u.dx2` (direct second derivative) or expressions where the Function is only multiplied, not differentiated through (e.g., `damp * update_expr`).
+
+**Diagnostic:** Print `expr.fd_order` — if it shows `(1,)` when you expect `(8,)`, this is the bug.
+
+See `references/faq-troubleshooting.md` → "Composed Derivatives Inherit `fd_order` from Lowest `space_order`" for full details.
+
+## Code Verification Before Presenting
+
+**When Devito is installed, always verify code compiles and runs before presenting it.**
+
+```python
+# Verification pattern: compile and run minimal test
+try:
+    op = Operator([update])
+    op.apply(time_M=2, dt=dt)  # Run just 2 steps to verify
+    assert np.all(np.isfinite(u.data[0, :])), "Solution contains NaN/Inf"
+except Exception as e:
+    # Code has errors - fix before presenting
+    raise RuntimeError(f"Devito code verification failed: {e}")
+```
+
+Key checks:
+1. **Operator compiles** - no C compilation errors
+2. **Solution is finite** - no NaN or Inf values
+3. **Solution is bounded** - not exploding (stability check)
+
+## Platform-Aware Configuration
+
+When running Devito code, detect the host system and set environment variables accordingly:
+
+1. **Check for GPU availability first:**
+   - NVIDIA: `nvidia-smi` succeeds → set `DEVITO_PLATFORM=nvidiaX`, `DEVITO_ARCH=nvc`, `DEVITO_LANGUAGE=openacc`
+   - AMD: `rocm-smi` succeeds → set `DEVITO_PLATFORM=amdgpuX`, `DEVITO_ARCH=aomp`, `DEVITO_LANGUAGE=openmp`
+   - Intel: `xpu-smi` succeeds → set `DEVITO_PLATFORM=intelgpuX`, `DEVITO_ARCH=sycl`, `DEVITO_LANGUAGE=sycl`
+
+2. **CPU fallback:** If no GPU detected, check available compiler:
+   - `gcc --version` → `DEVITO_ARCH=gcc`, `DEVITO_LANGUAGE=openmp`
+   - `clang --version` → `DEVITO_ARCH=clang`, `DEVITO_LANGUAGE=openmp`
+   - `icx --version` → `DEVITO_ARCH=icx`, `DEVITO_LANGUAGE=openmp`
+
+3. **macOS specifics:** Use `DEVITO_ARCH=clang`, `DEVITO_LANGUAGE=openmp`. Requires `brew install llvm libomp` and LLVM on PATH for OpenMP support.
+
+4. **MPI:** Add `DEVITO_MPI=1` (or `full` for overlap) when launching with `mpirun`.
+
+See `references/faq-troubleshooting.md` → "Environment Variables" for the complete reference table of all 15 `DEVITO_` variables, target presets, and debugging recipes.
+
+## Core Workflow
+
+```
+1. Grid        → Define discrete domain (shape, extent)
+2. Fields      → Create unknowns (TimeFunction) and coefficients (Function)
+3. PDE         → Write derivatives symbolically (.dx, .dx2, .laplace, .dt, .dt2)
+4. Update      → Explicit step: Eq(u.forward, ...) or solve(pde, u.forward)
+5. Compile/Run → Operator([eqs...])(time=Nt, dt=dt)
+6. BCs         → Extra Eq(...) constraints or subdomains
+7. Extract     → Final solution at u.data[Nt % (time_order+1)] (rolling buffer)
+```
+
+For complete API reference (Grid, Function, TimeFunction, SparseTimeFunction, Eq, solve, Operator, derivatives, vector/tensor fields), see `references/dsl-semantics.md`.
+
+## Boundary Conditions
+
+### Indexed Assignment (explicit but not MPI-safe for hardcoded indices)
+```python
+t = grid.stepping_dim
+x, y = grid.dimensions
+bc = [
+    Eq(u[t+1, 0, y], 0.0),      # Left boundary
+    Eq(u[t+1, Nx-1, y], 0.0),   # Right boundary
+]
+```
+
+### Subdomain (MPI-safe, preferred)
+```python
+update = Eq(u.forward, stencil, subdomain=grid.interior)
+```
+
+### Absorbing Layer (sponge)
+```python
+# damp only multiplies — space_order doesn't matter here
+damp = Function(name="damp", grid=grid)
+
+ succeeded in 0ms:
+---
+name: paper-lookup
+description: Search 10 academic paper databases via REST APIs for research papers, preprints, and scholarly articles. Covers PubMed, PMC (full text), bioRxiv, medRxiv, arXiv, OpenAlex, Crossref, Semantic Scholar, CORE, Unpaywall. Use when searching for papers, citations, DOI/PMID lookups, abstracts, full text, open access, preprints, citation graphs, author search, or any scholarly literature query. Triggers on mentions of any supported database or requests like "find papers on X" or "look up this DOI".
+metadata:
+  skill-author: K-Dense Inc.
+---
+
+# Paper Lookup
+
+You have access to 10 academic paper databases through their REST APIs. Your job is to figure out which database(s) best serve the user's query, call them, and return the results.
+
+## Core Workflow
+
+1. **Understand the query** -- What is the user looking for? A specific paper by DOI? Papers on a topic? An author's publications? Open access PDFs? Full text? This determines which database(s) to hit.
+
+2. **Select database(s)** -- Use the database selection guide below. Many queries benefit from hitting multiple databases -- for example, searching PubMed for papers and then checking Unpaywall for open access copies.
+
+3. **Read the reference file** -- Each database has a reference file in `references/` with endpoint details, query formats, and example calls. Read the relevant file(s) before making API calls.
+
+4. **Make the API call(s)** -- See the **Making API Calls** section below for which HTTP fetch tool to use on your platform.
+
+5. **Return results** -- Always return:
+   - The **raw JSON** (or parsed XML for arXiv) response from each database
+   - A **list of databases queried** with the specific endpoints used
+   - If a query returned no results, say so explicitly rather than omitting it
+
+## Database Selection Guide
+
+Match the user's intent to the right database(s).
+
+### By Use Case
+
+| User is asking about... | Primary database(s) | Also consider |
+|---|---|---|
+| Papers on a biomedical topic | PubMed | Semantic Scholar, OpenAlex |
+| Full text of a biomedical article | PMC | CORE |
+| Biology preprints | bioRxiv | Semantic Scholar, OpenAlex |
+| Health/medical preprints | medRxiv | Semantic Scholar, OpenAlex |
+| Physics, math, or CS preprints | arXiv | Semantic Scholar, OpenAlex |
+| Papers across all fields | OpenAlex | Semantic Scholar, Crossref |
+| A specific paper by DOI | Crossref | Unpaywall, Semantic Scholar |
+| Open access PDF for a paper | Unpaywall | CORE, PMC |
+| Citation graph (who cites whom) | Semantic Scholar | OpenAlex |
+| Author's publications | Semantic Scholar | OpenAlex |
+| Paper recommendations | Semantic Scholar | -- |
+| Full text (any field) | CORE | PMC (biomedical only) |
+| Journal/publisher metadata | Crossref | OpenAlex |
+| Funder information | Crossref | OpenAlex |
+| Convert between PMID/PMCID/DOI | PMC (ID Converter) | Crossref |
+| Recent preprints by date | bioRxiv, medRxiv | arXiv |
+
+### Cross-Database Queries
+
+| User is asking about... | Databases to query |
+|---|---|
+| Everything about a paper (metadata + citations + OA) | Crossref + Semantic Scholar + Unpaywall |
+| Comprehensive literature search | PubMed + OpenAlex + Semantic Scholar |
+| Find and read a paper | PubMed (find) + Unpaywall (OA link) + PMC or CORE (full text) |
+| Preprint and its published version | bioRxiv/medRxiv + Crossref |
+| Author overview with citation metrics | Semantic Scholar + OpenAlex |
+
+When a query spans multiple needs (e.g., "find papers about CRISPR and get me the PDFs"), query the relevant databases in parallel.
+
+## Common Identifier Formats
+
+Different databases use different identifier systems. If a query fails, the identifier format may be wrong.
+
+| Identifier | Format | Example | Used by |
+|---|---|---|---|
+| DOI | `10.xxxx/xxxxx` | `10.1038/nature12373` | All databases |
+| PMID | Integer | `34567890` | PubMed, PMC, Semantic Scholar |
+| PMCID | `PMC` + digits | `PMC7029759` | PMC, Europe PMC |
+| arXiv ID | `YYMM.NNNNN` | `2103.15348` | arXiv, Semantic Scholar |
+| OpenAlex ID | `W` + digits | `W2741809807` | OpenAlex |
+| Semantic Scholar ID | 40-char hex | `649def34f8be...` | Semantic Scholar |
+| ORCID | `0000-XXXX-XXXX-XXXX` | `0000-0001-6187-6610` | OpenAlex, Crossref |
+| ISSN | `XXXX-XXXX` | `0028-0836` | Crossref, OpenAlex |
+
+**Cross-referencing IDs:** Semantic Scholar accepts DOI, PMID, PMCID, and arXiv ID via prefixes (e.g., `DOI:10.1038/nature12373`, `PMID:34567890`, `ARXIV:2103.15348`). OpenAlex accepts DOI and PMID via prefixes (`doi:10.1038/...`, `pmid:34567890`). Use the PMC ID Converter to translate between PMID, PMCID, and DOI.
+
+## API Keys and Access
+
+Most of these databases are fully open. A few benefit from API keys for higher rate limits.
+
+### Databases requiring or benefiting from API keys
+
+| Database | Env Variable | Required? | Registration |
+|---|---|---|---|
+| NCBI (PubMed, PMC) | `NCBI_API_KEY` | No (3 req/s without, 10 with) | https://www.ncbi.nlm.nih.gov/account/settings/ |
+| CORE | `CORE_API_KEY` | Yes for full text | https://core.ac.uk/services/api |
+| Semantic Scholar | `S2_API_KEY` | No (shared pool without) | https://www.semanticscholar.org/product/api#api-key-form |
+| OpenAlex | `OPENALEX_API_KEY` | Recommended | https://openalex.org/settings/api |
+
+### Fully open databases (no key needed)
+
+| Database | Notes |
+|---|---|
+| bioRxiv / medRxiv | No auth, no documented rate limits |
+| arXiv | No auth, max 1 request per 3 seconds |
+| Crossref | No auth; add `mailto` param for polite pool (2x rate limit) |
+| Unpaywall | No auth; requires `email` parameter |
+
+### Loading API keys
+
+1. **Check the environment first** -- the key may already be exported (e.g., `$NCBI_API_KEY`).
+2. **Fall back to `.env`** -- check `.env` in the current working directory.
+3. **Proceed without** -- most APIs still work at lower rate limits. Tell the user which key is missing and how to get one.
+
+## Making API Calls
+
+Use your environment's HTTP fetch tool to call REST endpoints:
+
+| Platform | HTTP Fetch Tool | Fallback |
+|---|---|---|
+| Claude Code | `WebFetch` | `curl` via Bash |
+| Gemini CLI | `web_fetch` | `curl` via shell |
+| Windsurf | `read_url_content` | `curl` via terminal |
+| Cursor | No dedicated fetch tool | `curl` via `run_terminal_cmd` |
+| Codex CLI | No dedicated fetch tool | `curl` via `shell` |
+| Cline | No dedicated fetch tool | `curl` via `execute_command` |
+
+If the fetch tool fails, fall back to `curl` via whatever shell tool is available.
+
+### Special cases
+
+- **arXiv returns Atom XML**, not JSON. Parse it or use `curl` and extract the relevant fields. Consider piping through a simple parser if available.
+- **PMC eFetch returns JATS XML** for full text. This is expected -- full text articles are in XML format.
+- **Crossref and Unpaywall** benefit from including a `mailto` parameter or email for the polite/fast pool.
+
+### Request guidelines
+
+- For **NCBI APIs** (PubMed, PMC): max 3 req/sec without key, 10 with key. Make requests sequentially.
+- For **arXiv**: max 1 request every 3 seconds. Be patient.
+- For **Crossref**: 5 req/sec (public), 10 req/sec (polite pool with `mailto`).
+- For other APIs with no strict limits, you can query multiple databases in parallel.
+- If you get HTTP 429 (rate limit), wait briefly and retry once.
+
+### Error recovery
+
+1. **Check the identifier format** -- use the Common Identifier Formats table. A PMID won't work in arXiv, an arXiv ID won't work in PubMed directly.
+2. **Try alternative identifiers** -- if a DOI fails in one database, try the title or PMID instead.
+3. **Try a different database** -- if PubMed returns nothing for a CS paper, try Semantic Scholar or OpenAlex.
+4. **Report the failure** -- tell the user which database failed, the error, and what you tried instead.
+
+## Output Format
+
+Structure your response like this:
+
+```
+## Databases Queried
+- **PubMed** -- esearch + esummary for "CRISPR gene therapy"
+- **Unpaywall** -- DOI lookup for 10.1038/...
+
+## Results
+
+### PubMed
+[raw JSON response or formatted results]
+
+### Unpaywall
+[raw JSON response]
+```
+
+If results are very large, present the most relevant portion and note that more data is available. But default to showing the full raw JSON -- the user asked for it.
+
+## Available Databases
+
+Read the relevant reference file before making any API call.
+
+### Biomedical Literature
+| Database | Reference File | What it covers |
+|---|---|---|
+| PubMed | `references/pubmed.md` | 37M+ biomedical citations, abstracts, MeSH terms |
+| PMC | `references/pmc.md` | 10M+ full-text biomedical articles (JATS XML), ID conversion |
+
+### Preprint Servers
+| Database | Reference File | What it covers |
+|---|---|---|
+| bioRxiv | `references/biorxiv.md` | Biology preprints (browse by date/DOI, no keyword search) |
+| medRxiv | `references/medrxiv.md` | Health sciences preprints (browse by date/DOI, no keyword search) |
+| arXiv | `references/arxiv.md` | Physics, math, CS, biology, economics preprints (keyword search, Atom XML) |
+
+### Multidisciplinary Indexes
+| Database | Reference File | What it covers |
+|---|---|---|
+| OpenAlex | `references/openalex.md` | 250M+ works, authors, institutions, topics, citation data |
+| Crossref | `references/crossref.md` | 150M+ DOI metadata, journals, funders, references |
+| Semantic Scholar | `references/semantic-scholar.md` | 200M+ papers, citation graphs, AI-generated TLDRs, recommendations |
+
+### Open Access & Full Text
+| Database | Reference File | What it covers |
+|---|---|---|
+| CORE | `references/core.md` | 37M+ full texts from OA repositories worldwide |
+| Unpaywall | `references/unpaywall.md` | OA status and PDF links for any DOI |
+
+web search: 
+web search: Lombard Piraux 2004 explicit simplified interface method order k interface finite difference DOI 10.1016/j.jcp.2003.09.024 ...
+web search: 
+web search: Saenger Bohlen 2000 finite difference rotated staggered grid anisotropy DOI S0165-2125(99)00023-2 ...
+web search: 
+web search: "Explicit Simplified Interface Method" "ADER" "fourth-order" "Lombard" DOI ...
+web search: 
+web search: "Modeling 1-D elastic P-waves in a fractured rock with hyperbolic jump conditions" DOI ...
+codex
+1. **Q1. Precompute Strategy**
+
+VERDICT: DISAGREE
+
+Precomputing `G_i^k`, `K_i^k`, `Mbar^-1`, and compact per-case ESIM rows on the host is right, but doing every timestep gather/dot/inject through Python/NumPy is not the clean production decomposition for Devito. It will be fragile for MPI, poor for GPU, and likely dominated by Python synchronization even if the interface band is small. I would instead precompute topology and coefficients on the host, then store them in Devito `Function`/indexed auxiliary arrays and compute the modified values inside compiled Devito code over a narrow irregular band or sparse custom dimension. A fully symbolic “one giant stencil with SubDomain + conditional masks + dot products” is possible in spirit but not elegant: it risks code bloat and branch-heavy loops in the main RSG operator. The better split is: regular RSG operator stays clean; a small compiled ESIM correction/fill operator computes auxiliary modified values; the irregular-band stencil reads from those auxiliaries. This preserves the Lombard-Piraux ESIM idea of local modified values while staying compatible with Devito’s generated-code model ([10.1016/j.jcp.2003.09.024](https://doi.org/10.1016/j.jcp.2003.09.024), [10.1016/S0165-2125(99)00023-2](https://doi.org/10.1016/S0165-2125(99)00023-2)).
+
+2. **Q2. Stencil Substitution Mechanics**
+
+VERDICT: AGREE
+
+Yes, for RSG you should think in terms of oriented cross-interface stencil reads, not just irregular grid points. A single physical grid point can require different modified values depending on which side’s smooth extension is being used, which field component is being read, and which staggered location/operator is asking for it. For SO=8 RSG, the relevant object is therefore closer to `O(crossing stencil legs)` than `O(irregular points)`, though you can deduplicate by keying on `(target_index, source_side, component, stagger_location, projection_case)`. Do not use `SparseFunction` as the primary mechanism unless you only need a quick prototype; its interpolation/injection semantics are a poor fit for replacement values in grid-aligned stencil reads. Prefer per-leg or per-side auxiliary `Function`s filled before the main update, then use masked equations only on the irregular band, not branches across the whole domain. MPI requires the auxiliary values to be computed for local stencil needs including halo-adjacent legs, with halo exchange or redundant halo-band computation handled deliberately. This is exactly the “same operator, modified values for crossing legs” structure of ESIM Eq. 43-44, but RSG makes the bookkeeping leg-oriented.
+
+3. **Q3. Order-k Choice**
+
+VERDICT: INCONCLUSIVE
+
+For the final Tier 3 target, matching ESIM order to the production stencil is the defensible numerical design: if the RSG scheme is SO=8, use an ESIM order high enough that the interface treatment is not the formal bottleneck. The literature precedent is not “always use k=8”; it is “choose the interface reconstruction order consistently with the base scheme if you want to preserve the scheme order near irregular points.” Piraux-Lombard’s 1D ESIM and Lombard-Piraux’s 2D acoustic/elastic ESIM state this preservation goal ([10.1006/jcph.2001.6696](https://doi.org/10.1006/jcph.2001.6696), [10.1016/j.jcp.2003.09.024](https://doi.org/10.1016/j.jcp.2003.09.024)); later ESIM work coupled the method to high-order schemes such as WENO/ADER with order compatibility as the governing principle ([10.1137/030601041](https://doi.org/10.1137/030601041), [10.1016/j.cam.2006.03.027](https://doi.org/10.1016/j.cam.2006.03.027)). That said, I would not start with k=8 for the first RSG implementation: it increases `Mbar` size, condition risk, component-mixing complexity, and debugging surface. Start with k=2 or k=3 as a feasibility prototype, then run k-sweep `{2,4,6,8}` on the same diagnostic to see whether the 45-degree artifact is interface-condition error or high-order reconstruction error. If k=2 kills the X-mode artifact but slightly degrades convergence, you have validated the architecture; if k=2 leaves high-frequency residue, then move upward.
+
+4. **Q4. Risks + Diagnostic Test**
+
+VERDICT: AGREE
+
+The highest-likelihood failure mode is not raw runtime overhead; it is wrong component/side/stagger bookkeeping in the fluid-solid ESIM right-hand side. RSG already relocates stress/velocity components in a nonstandard diagonal topology, and Lombard-Piraux fluid-solid ESIM explicitly mixes fluid and solid unknown sets, so a single off-by-half-cell, wrong-side extension, or missing traction/velocity compatibility term can create exactly the kind of four-lobed artifact you are trying to remove. The second risk is conditioning of `Mbar` as k and q grow, especially for oblique interface placements where the disk samples become geometrically unbalanced; this should be monitored with singular values and rank decisions per projection case. MPI halo behavior is a practical risk, but it is easier to isolate after a serial/local correctness test. The cheapest diagnostic before multi-day implementation is a frozen-field manufactured extension test: take an analytic plane/interface solution satisfying the fluid-solid jump conditions, build the RSG crossing-leg table for the 30-degree Petrobras interface, compute all `U*` for one timestep without advancing waves, and measure replacement error plus residual traction/normal-velocity jump on every crossing leg. This tests projection geometry, side logic, component ordering, `Mbar` conditioning, and SO=8 leg coverage without running a full solver. Bader-Almquist-Dunham’s SBP interface work is a useful comparator because it emphasizes explicit, stable acoustic-elastic coupling rather than treating the fluid as a degenerate solid ([10.1190/geo2022-0195.1](https://doi.org/10.1190/geo2022-0195.1)).
+
+SUMMARY: Implement Tier 3 as a two-stage compiled Devito design: host-precomputed ESIM topology/coefficient tables, Devito-side modified-value fill over the crossing-leg band, then masked irregular-band RSG substitution using auxiliary arrays.
+
+VERDICT: AGREE
+tokens used
+51,829
+
+
+[2] gemini --skip-trust -p -  (174.7s, exit=0, verdict=AGREE)
+    output saved: /tmp/review_pool_1779880990_02_gemini_skiptrust_p_.txt
+**Q1**
+VERDICT: DISAGREE
+A host-side Python/NumPy roundtrip via array injection at every timestep fundamentally violates Devito's execution model. It forces implicit synchronization and CPU-GPU data transfers, and completely prevents the C compiler from applying critical loop optimizations like temporal blocking. The purely Devito-native approach is to encode the precomputed row vectors $N_{I,J}$ as spatially varying coefficient fields (`Function`s) defined exclusively on an irregular-point `SubDomain`. The disk $B$ gather and dot product can then be expressed symbolically as a localized sum within Devito's generated C/C++ loop. This avoids the Python-C transition entirely, preserving high-performance execution while strictly implementing the Lombard-Piraux 2004 (DOI: 10.1016/j.jcp.2003.09.024) explicit matrix-vector substitution step.
+
+**Q2**
+VERDICT: AGREE
+The Lombard-Piraux 2004 formulation (DOI: 10.1016/j.jcp.2003.09.024) requires extrapolated values $U^*$ specific to the medium crossing. Therefore, a high-order stencil with radius $R$ generates $O(R \times \text{irregular\_points})$ modified values per timestep. In Devito, attempting a per-leg conditional branch (`if` statement) within the innermost RSG loop will cause severe warp divergence on GPUs and ruin vectorization on CPUs. The standard Devito pattern for this is to compute all $U^*$ values in a separate, prior `Eq` pass over the `SubDomain` and store them in a dedicated ghost-field tensor (e.g., `U_star`). The main SO=8 RSG (Saenger 2000, DOI: 10.1016/S0165-2125(99)00023-2) PDE stencil is then rewritten to unconditionally read from a pre-blended variable `U_effective = U * (1 - mask) + U_star * mask`, maintaining a dense, branch-free compute pipeline.
+
+**Q3**
+VERDICT: DISAGREE
+Attempting $k=8$ to match the RSG SO=8 spatial order is theoretically attractive but practically disastrous. A Taylor expansion of order 8 requires an enormous local disk $B$, leading to severe ill-conditioning of the overdetermined matrix $M$ (exacerbated by Runge's phenomenon) and a massive spike in the memory footprint of the precomputed $N_{I,J}$ weights. Furthermore, literature on high-order boundary treatments (e.g., Bader, Almquist, and Dunham 2023, DOI: 10.1190/geo2022-0195.1) demonstrates that because the interface is a lower-dimensional manifold, the closure order can often be lower without substantially degrading the global convergence rate. Using $k=3$ or $k=4$ ensures the jump-condition matrices $K_1^k$ and $G_1^k$ remain well-posed while capturing the essential physics of the discontinuous interface. Matching the full scheme order for interface extrapolation is rarely required for stability or global accuracy in production solvers.
+
+**Q4**
+VERDICT: AGREE
+The primary failure mode of mapping ESIM to Saenger 2000 (DOI: 10.1016/S0165-2125(99)00023-2) RSG is topological misalignment. The Lombard-Piraux 2004 (DOI: 10.1016/j.jcp.2003.09.024) jump conditions assume colocated variables, whereas RSG shifts stresses and velocities to alternating diagonal corners, requiring the disk $B$ gathering logic to interpolate different physical components from mismatched spatial grids. This misalignment risks generating unstable, mixed-mode extrapolations. The single cheapest, most conclusive diagnostic test is a **static projection test**: initialize the RSG grid with a known analytical discontinuous field (e.g., a frozen snapshot of a plane wave crossing the interface), apply the precomputed $N_{I,J}$ to compute $U^*$, and measure the residual of the spatial derivative $L(U^*)$ against the analytical spatial derivative strictly at the irregular band, bypassing time-stepping entirely. If the static residual fails to converge or explodes, the matrix formulation $M$ is fundamentally incompatible with the RSG topology.
+
+SUMMARY: The Tier 3 ESIM implementation must use Devito-native SubDomains for a branch-free $U^*$ substitution and a reduced order $k=4$ to maintain matrix stability, but this massive architectural effort should only proceed if a zero-timestep static projection test succeeds in neutralizing the topological mismatch of the RSG cell centers.
+VERDICT: AGREE
+Ripgrep is not available. Falling back to GrepTool.
+MCP issues detected. Run /mcp list for status.
+API returned invalid content after all retries. Full report available at: /var/folders/wz/39jh6yrs0wb1q26n_lcjxx8w0000gp/T/gemini-client-error-generateJson-invalid-content-2026-05-27T11-25-13-051Z.json Error: Retry attempts exhausted
+    at retryWithBackoff (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:270882:9)
+    at async BaseLlmClient._generateWithRetry (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:271034:14)
+    at async BaseLlmClient.generateJson (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:270932:21)
+    at async NumericalClassifierStrategy.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319681:28)
+    at async CompositeStrategy.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319752:26)
+    at async ModelRouterService.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319915:18)
+    at async GeminiClient.processTurn (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:307625:24)
+    at async GeminiClient.sendMessageStream (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:307740:14)
+    at async file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/gemini-YQATFAPB.js:10880:26
+    at async main (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/gemini-YQATFAPB.js:16237:5)
+[Routing] NumericalClassifierStrategy failed: Error: Failed to generate content: Retry attempts exhausted
+    at BaseLlmClient._generateWithRetry (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:271064:13)
+    at async BaseLlmClient.generateJson (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:270932:21)
+    at async NumericalClassifierStrategy.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319681:28)
+    at async CompositeStrategy.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319752:26)
+    at async ModelRouterService.route (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:319915:18)
+    at async GeminiClient.processTurn (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:307625:24)
+    at async GeminiClient.sendMessageStream (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/chunk-U6X4OPT5.js:307740:14)
+    at async file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/gemini-YQATFAPB.js:10880:26
+    at async main (file:///opt/homebrew/lib/node_modules/@google/gemini-cli/bundle/gemini-YQATFAPB.js:16237:5)
+
+
+==> Combined verdict: AGREE ('codex exec --skip-git-repo-check -'=AGREE  'gemini --skip-trust -p -'=AGREE)

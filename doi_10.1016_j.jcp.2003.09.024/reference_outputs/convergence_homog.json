@@ -1,0 +1,52 @@
+{
+  "config": {
+    "L_x": 0.1,
+    "c": 1500.0,
+    "rho": 1000.0,
+    "omega": 210744.44193122178,
+    "T_end": 1.4907119849998598e-05,
+    "alpha_propagation_rad": 0.4636476090008061
+  },
+  "sweep": [
+    {
+      "Nx": 50,
+      "dx": 0.002,
+      "dt": 3.7267799624996494e-07,
+      "n_steps": 40,
+      "L_inf": 0.024834153711184324,
+      "L_1": 0.0063281311967222234,
+      "wall_s": 0.005936861038208008
+    },
+    {
+      "Nx": 100,
+      "dx": 0.001,
+      "dt": 1.8633899812498247e-07,
+      "n_steps": 80,
+      "L_inf": 0.0062172920768606005,
+      "L_1": 0.0015842295522575259,
+      "wall_s": 0.03175497055053711
+    },
+    {
+      "Nx": 200,
+      "dx": 0.0005,
+      "dt": 9.375547075470816e-08,
+      "n_steps": 159,
+      "L_inf": 0.001552426331431031,
+      "L_1": 0.00039538007013407696,
+      "wall_s": 0.18473172187805176
+    },
+    {
+      "Nx": 400,
+      "dx": 0.00025,
+      "dt": 4.702561466876529e-08,
+      "n_steps": 317,
+      "L_inf": 0.00038781905211455504,
+      "L_1": 9.876080456989856e-05,
+      "wall_s": 1.8110911846160889
+    }
+  ],
+  "order_L_inf": 2.0004155829906267,
+  "order_L_1": 2.00075606702733,
+  "paper_reference": "Lombard & Piraux 2004, JCP 195, Table 2",
+  "note": "Homogeneous fluid bulk only; the full LP04 \u00a74.2 plane-interface convergence requires the fluid-solid R/T analytical reference. KNOWN-INCOMPLETE per analytical_reference.py:PlaneWaveAcousticElastic."
+}
