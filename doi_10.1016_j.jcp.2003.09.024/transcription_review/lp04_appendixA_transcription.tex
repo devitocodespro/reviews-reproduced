@@ -1,0 +1,115 @@
+\textbf{Lombard \& Piraux 2004 --- Appendix A.1, A.2 ($\boldsymbol{G}_i^k$ construction, paper pp.\ 30--31)}
+
+\medskip
+
+\textbf{Context.} The $\boldsymbol{G}_i^k$ matrices encode the
+compatibility reductions $\boldsymbol{U}_i^k = \boldsymbol{G}_i^k
+\boldsymbol{V}_i^k$ (Eq 25). The pseudocode below builds each
+$\boldsymbol{G}_i^k$ as a sparse matrix indexed by $(\alpha, \beta)$,
+where rows $\alpha$ enumerate the components of $\boldsymbol{U}_i^k$
+and columns $\beta$ enumerate the components of the independent
+sub-vector $\boldsymbol{V}_i^k$.
+
+\medskip
+
+\textbf{Eq A.1 --- fluid case $\Omega_i$ ($\boldsymbol{V}_i^k$ has
+$(k+1)(k+3)$ components):}
+
+\medskip
+
+\begin{minipage}{\textwidth}\ttfamily\small
+$\alpha = 0$, $\beta = 0$ \\
+for $\gamma = 0, \ldots, k$: \\
+\hphantom{ww}for $\varepsilon = 1, \ldots, 3$: \\
+\hphantom{wwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{+}= 1$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = 1$ \\
+\hphantom{ww}for $\delta = 1, \ldots, \gamma$: \\
+\hphantom{wwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{-}= 1$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = 1$ \\
+\hphantom{wwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{+}= 2$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = 1$ \\
+\hphantom{wwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{+}= 1$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = 1$ \\
+\end{minipage}
+\hfill (A.1)
+
+\medskip
+
+\textbf{Eq A.2 --- solid case $\Omega_i$ ($\boldsymbol{V}_i^k$ has
+$2k^2 + 8k + 5$ components):}
+
+\medskip
+
+\begin{minipage}{\textwidth}\ttfamily\small
+$\alpha = 0$, $\beta = 0$ \\
+for $\gamma = 0, \ldots, k$, for $\delta = 0, \ldots, \gamma$: \\
+\hphantom{ww}if $\delta = 0$: \\
+\hphantom{wwww}for $\varepsilon = 1, \ldots, 5$: \\
+\hphantom{wwwwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{+}= 1$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = 1$ \\
+\hphantom{ww}if $\gamma \neq 0$ and $\delta \neq 0$ and $\gamma \neq \delta$: \\
+\hphantom{wwww}if $\gamma = 2$: $\nu = 0$, $\eta = 0$ \\
+\hphantom{wwww}else if $\delta = 1$: $\nu = 0$, $\eta = 1$ \\
+\hphantom{wwww}else if $\delta = \gamma - 1$: $\nu = 1$, $\eta = 0$ \\
+\hphantom{wwww}else: $\nu = 1$, $\eta = 1$ \\
+\hphantom{wwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{+}= 1$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = 1$ \\
+\hphantom{wwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{+}= 1$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = 1$ \\
+\hphantom{wwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{+}= 1$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = 1$ \\
+\hphantom{wwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{-}= 5 - \nu$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = \alpha_2$ \\
+\hphantom{wwwwwwwwwwww}$\beta \mathrel{+}= 2 - \nu$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = \alpha_1$ \\
+\hphantom{wwwwwwwwwwww}$\beta \mathrel{+}= 7$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = \alpha_1$ \\
+\hphantom{wwwwwwwwwwww}$\beta \mathrel{+}= 2 - \eta$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = \alpha_2$ \\
+\hphantom{wwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{-}= 5 - \eta$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = 1$ \\
+\hphantom{ww}if $\gamma \neq 0$ and $\gamma = \delta$: \\
+\hphantom{wwww}for $\varepsilon = 1, \ldots, 5$: \\
+\hphantom{wwwwww}$\alpha \mathrel{+}= 1$, $\beta \mathrel{+}= 1$,
+$\boldsymbol{G}_i^k[\alpha, \beta] = 1$ \\
+\end{minipage}
+\hfill (A.2)
+
+\medskip
+
+$\alpha_1, \alpha_2$ are the solid elastic-coefficient combinations
+from Eq 22:
+\begin{equation*}
+  \alpha_1 = \frac{c_p^2}{4(c_p^2 - c_s^2)},\qquad
+  \alpha_2 = \frac{2 c_s^2 - c_p^2}{4(c_p^2 - c_s^2)}
+\end{equation*}
+
+\medskip
+
+\textbf{Reading notes (subtle points in the pseudocode):}
+\begin{itemize}
+  \item Inner indented assignments in (A.2) without an explicit
+    $\alpha \mathrel{+}= 1$ at the start of the line operate on
+    the \emph{same} row $\alpha$ as the prior statement. The
+    column $\beta$ accumulates relative offsets within that
+    row.
+  \item Within the if-branch ``$\gamma \neq 0$ and $\delta \neq 0$
+    and $\gamma \neq \delta$'', the five-row block produces the
+    portion of $\boldsymbol{G}_i^k$ that involves the elastic
+    coefficients $\alpha_1$, $\alpha_2$ (Eq 22), encoding the
+    solid-side stress-symmetry compatibility (Eq 24).
+  \item $\nu, \eta \in \{0, 1\}$ switch the position of the
+    $\alpha_1$/$\alpha_2$ entries depending on whether
+    $\gamma = 2$, $\delta = 1$, $\delta = \gamma - 1$, or
+    neither.
+\end{itemize}
+
+\medskip
+
+\textbf{Eq A.3--A.7 --- SVD pseudoinverse (textbook, omitted from
+this side-by-side).} Eq A.3--A.7 detail the SVD-based pseudoinverse
+$\boldsymbol{A}^{-1} = \boldsymbol{Z}_A \boldsymbol{Y}_A^{-1}
+\boldsymbol{X}_A^T$ and the null-space-spanning $\boldsymbol{R}_A
+\boldsymbol{\Lambda}$ extension. Standard SVD machinery; will be
+implemented in Python via \texttt{numpy.linalg.svd} (no
+transcription error risk).

@@ -1,0 +1,58 @@
+\textbf{Lombard \& Piraux 2004 --- Eq 10--11 (fluid--solid jump conditions, paper p.\ 8)}
+
+\textbf{Parametrisation of $\Gamma$:} $(x(\tau), y(\tau))$, with
+\begin{align*}
+  \boldsymbol{t} &= (x', y') \qquad \text{(tangent)} \\
+  \boldsymbol{n} &= (-y', x') \qquad \text{(normal)}
+\end{align*}
+
+\textbf{Jump conditions (Eq 10):}
+\begin{equation*}
+  [\boldsymbol{v} \cdot \boldsymbol{n}] = 0, \qquad
+  -p \, \boldsymbol{n} = \boldsymbol{\sigma} \, \boldsymbol{n}
+\end{equation*}
+(where $\boldsymbol{\sigma}$ is the solid stress tensor.)
+
+\textbf{Order-0 matrices recovered from (1) and (10) --- Eq 11:}
+
+\medskip
+{\small Fluid side $\Omega_1$, state $\boldsymbol{U}_1 = (v_1, v_2, p)^T$:}
+\begin{equation*}
+  \boldsymbol{C}_1^0 =
+  \begin{pmatrix}
+    -y' & x' & 0 \\
+    0 & 0 & x'^2 + y'^2
+  \end{pmatrix}
+  \quad (2 \times 3)
+\end{equation*}
+
+{\small Solid side $\Omega_2$, state $\boldsymbol{U}_2 = (v_1, v_2, \sigma_{11}, \sigma_{12}, \sigma_{22})^T$:}
+\begin{equation*}
+  \boldsymbol{C}_2^0 =
+  \begin{pmatrix}
+    -y' & x' & 0 & 0 & 0 \\
+    0 & 0 & y'^2 & -2x'y' & x'^2
+  \end{pmatrix}
+  \quad (2 \times 5)
+\end{equation*}
+
+{\small Boundary-condition rows:}
+\begin{equation*}
+  \boldsymbol{L}_1^0 =
+  \begin{pmatrix} 0 & 0 & 0 \end{pmatrix}
+  \quad \text{(1 $\times$ 3 --- empty for perfect fluid)}
+\end{equation*}
+
+\begin{equation*}
+  \boldsymbol{L}_2^0 =
+  \begin{pmatrix} 0 & 0 & x'y' & y'^2 - x'^2 & -x'y' \end{pmatrix}
+  \quad \text{(1 $\times$ 5 --- vanishing tangential shear $\boldsymbol{t}^T \boldsymbol{\sigma} \boldsymbol{n} = 0$)}
+\end{equation*}
+
+\textbf{Implementation notes:}
+\begin{itemize}
+  \item $\boldsymbol{C}_2^0$ row 2: $y'^2 \sigma_{11} - 2 x' y' \sigma_{12} + x'^2 \sigma_{22} = -p\,(x'^2 + y'^2)$\\
+    \emph{Normal-stress continuity condition} $\boldsymbol{n}^T \boldsymbol{\sigma} \boldsymbol{n} = -p \cdot |\boldsymbol{t}|^2$.
+  \item $\boldsymbol{L}_2^0$: $x' y' \sigma_{11} + (y'^2 - x'^2) \sigma_{12} - x' y' \sigma_{22} = 0$\\
+    \emph{Tangential shear} $\boldsymbol{t}^T \boldsymbol{\sigma} \boldsymbol{n} = 0$.
+\end{itemize}

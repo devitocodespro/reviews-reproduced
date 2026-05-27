@@ -1,0 +1,96 @@
+\textbf{Lombard \& Piraux 2004 --- Eq 38--42 (master ESIM equation, paper p.\ 15)}
+
+\medskip
+
+\textbf{Eq 38 --- assemble Eq 35 and Eq 37 into matrix
+$\boldsymbol{M}$.}
+Stacking one row per $(i, j) \in B = B_1 \cup B_2$ (rows on $B_1$
+use Eq 35; rows on $B_2$ use Eq 37):
+\begin{equation*}
+  (\boldsymbol{U}^n)_B
+  = \boldsymbol{M}
+    \begin{pmatrix} \boldsymbol{W}_1^k \\ \boldsymbol{\Lambda}^k \end{pmatrix}
+  + \begin{pmatrix} O(\Delta x^{k+1}) \\ \vdots \\ O(\Delta x^{k+1}) \end{pmatrix}
+  \tag{38}
+\end{equation*}
+where $(\boldsymbol{U}^n)_B$ is the stacked vector of exact values
+$\boldsymbol{U}(x_i, y_j, t^n)$ at the points of $B$. The radius
+$q$ is chosen so that (38) is \emph{over-determined}.
+
+\medskip
+
+\textbf{Eq 39 --- least-squares pseudoinverse} $\boldsymbol{M}^{-1}$
+(via normal equations, SVD, ...). Dropping the Taylor remainders
+and identifying numerical estimates with exact values:
+\begin{equation*}
+  \begin{pmatrix} \boldsymbol{W}_1^k \\ \boldsymbol{\Lambda}^k \end{pmatrix}
+  = \boldsymbol{M}^{-1} (\boldsymbol{U}^n)_B
+  \tag{39}
+\end{equation*}
+
+\textbf{Eq 40 --- restrict to $\boldsymbol{W}_1^k$ only.} Let
+$\bar{\boldsymbol{M}}^{-1}$ denote the restriction of
+$\boldsymbol{M}^{-1}$ to the rows that produce
+$\boldsymbol{W}_1^k$ (dropping the free-parameter rows for
+$\boldsymbol{\Lambda}^k$):
+\begin{equation*}
+  \boldsymbol{W}_1^k = \bar{\boldsymbol{M}}^{-1} (\boldsymbol{U}^n)_B
+  \tag{40}
+\end{equation*}
+
+\medskip
+
+\textbf{Eq 41 --- modified value at $(I, J) \in \Omega_2$.} From
+Eq 25, 26, 33:
+\begin{equation*}
+  (I, J) \in \Omega_2,\
+  \boldsymbol{U}^*_{I,J}
+  = \boldsymbol{\Pi}_{I,J}^k \boldsymbol{U}_1^k
+  = \boldsymbol{\Pi}_{I,J}^k \boldsymbol{G}_1^k \boldsymbol{K}_1^k \boldsymbol{W}_1^k
+  \tag{41}
+\end{equation*}
+
+\medskip
+
+\textbf{Eq 42 --- master ESIM equation} (insert Eq 40 into Eq 41):
+\begin{equation*}
+  \boxed{\ \boldsymbol{U}^*_{I,J}
+  = \boldsymbol{\Pi}_{I,J}^k \boldsymbol{G}_1^k \boldsymbol{K}_1^k
+    \bar{\boldsymbol{M}}^{-1} (\boldsymbol{U}^n)_B\ }
+  \tag{42}
+\end{equation*}
+
+\medskip
+
+\textbf{Notes from the paper:}
+\begin{itemize}
+  \item For an irregular point on the $\Omega_1$ side,
+    $\boldsymbol{G}_1^k$ and $\boldsymbol{K}_1^k$ are swapped for
+    $\boldsymbol{G}_2^k$ and $\boldsymbol{K}_2^k$ in (42).
+  \item For a fluid--solid interface ($\Omega_1$ = fluid,
+    $\Omega_2$ = solid), the right-hand side of (42) involves
+    BOTH the 3-component fluid solution AND the 5-component
+    solid solution at the points of $B$.
+\end{itemize}
+
+\medskip
+
+\textbf{Implementation notes (dipping-line Petrobras case):}
+\begin{itemize}
+  \item $\boldsymbol{\Pi}_{I,J}^k$, $\boldsymbol{G}_i^k$,
+    $\boldsymbol{K}_i^k$, $\boldsymbol{S}_i^k$,
+    $\bar{\boldsymbol{M}}^{-1}$ depend only on the relative
+    positions $(x_i - x_P, y_j - y_P)$ and on the (constant)
+    normal/tangent directions. They are pre-computed ONCE per
+    irregular point during set-up.
+  \item Per-timestep cost: one matrix--vector product
+    $\bar{\boldsymbol{M}}^{-1} (\boldsymbol{U}^n)_B$ per
+    irregular point, then a second product against
+    $\boldsymbol{G}_1^k \boldsymbol{K}_1^k$, then a dot product
+    with $\boldsymbol{\Pi}_{I,J}^k$. Total $\sim 1\%$ overhead at
+    400$\times$400 per the paper's §3.9.
+  \item For $k = 2$ on a fluid--solid interface, the paper's
+    canonical radius is $q \approx 3.5\,\Delta x$ (gives
+    $\sim 40$ neighbours so (38) is comfortably
+    over-determined).
+\end{itemize}

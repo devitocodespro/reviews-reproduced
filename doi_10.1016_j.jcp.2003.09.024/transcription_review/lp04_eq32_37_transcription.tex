@@ -1,0 +1,89 @@
+\textbf{Lombard \& Piraux 2004 --- Eq 32--37 (ESIM Taylor setup, paper pp.\ 13--14)}
+
+\medskip
+
+\textbf{Setup (Fig 3).} Let $M(x_I, y_J) \in \Omega_2$ be an
+\emph{irregular} grid point (whose stencil reaches across $\Gamma$),
+and $P$ its orthogonal projection onto $\Gamma$. Let $B$ be the set
+of grid points enclosed in the disk of radius $q$ centred on $P$,
+partitioned $B = B_1 \cup B_2$ by side.
+
+\medskip
+
+\textbf{Eq 32 --- $k$-th order Taylor row vector $\boldsymbol{\Pi}_{i,j}^k$:}
+\begin{equation*}
+  \boldsymbol{\Pi}_{i,j}^k =
+  \left( 1,\ (x_i - x_P),\ (y_j - y_P),\ \ldots,\ \frac{(y_j - y_P)^k}{k!} \right)
+  \tag{32}
+\end{equation*}
+
+\textbf{Eq 33 --- modified value at $M(x_I, y_J)$:}
+\begin{equation*}
+  \boldsymbol{U}^*(x_I, y_J, t^n)
+  = \boldsymbol{\Pi}_{I,J}^k \boldsymbol{U}_1^k
+  \tag{33}
+\end{equation*}
+
+\medskip
+
+\textbf{Eq 34 --- Taylor expansion at $(i, j) \in B_1$} (using Eq 25, 26):
+\begin{equation*}
+\begin{aligned}
+  (i,j) \in B_1,\ \boldsymbol{U}(x_i, y_j, t^n)
+  &= \boldsymbol{\Pi}_{i,j}^k \boldsymbol{U}_1^k + O(\Delta x^{k+1}) \\
+  &= \boldsymbol{\Pi}_{i,j}^k \boldsymbol{G}_1^k \boldsymbol{V}_1^k + O(\Delta x^{k+1}) \\
+  &= \boldsymbol{\Pi}_{i,j}^k \boldsymbol{G}_1^k \boldsymbol{K}_1^k \boldsymbol{W}_1^k + O(\Delta x^{k+1})
+\end{aligned}
+\tag{34}
+\end{equation*}
+
+\textbf{Eq 35 --- inject the $[\boldsymbol{I} | \boldsymbol{0}]$ projector
+to use the full $(\boldsymbol{W}_1^k, \boldsymbol{\Lambda}^k)$ vector:}
+\begin{equation*}
+  (i,j) \in B_1,\ \boldsymbol{U}(x_i, y_j, t^n)
+  = \boldsymbol{\Pi}_{i,j}^k \boldsymbol{G}_1^k \boldsymbol{K}_1^k
+  (\boldsymbol{I} \mid \boldsymbol{0})
+  \begin{pmatrix} \boldsymbol{W}_1^k \\ \boldsymbol{\Lambda}^k \end{pmatrix}
+  + O(\Delta x^{k+1})
+  \tag{35}
+\end{equation*}
+
+\medskip
+
+\textbf{Eq 36 --- Taylor expansion at $(i, j) \in B_2$:}
+\begin{equation*}
+\begin{aligned}
+  (i,j) \in B_2,\ \boldsymbol{U}(x_i, y_j, t^n)
+  &= \boldsymbol{\Pi}_{i,j}^k \boldsymbol{U}_2^k + O(\Delta x^{k+1}) \\
+  &= \boldsymbol{\Pi}_{i,j}^k \boldsymbol{G}_2^k \boldsymbol{V}_2^k + O(\Delta x^{k+1}) \\
+  &= \boldsymbol{\Pi}_{i,j}^k \boldsymbol{G}_2^k \boldsymbol{K}_2^k \boldsymbol{W}_2^k + O(\Delta x^{k+1})
+\end{aligned}
+\tag{36}
+\end{equation*}
+
+\textbf{Eq 37 --- substitute Eq 31 (express $\boldsymbol{W}_2^k$
+via $\boldsymbol{W}_1^k$ and $\boldsymbol{\Lambda}^k$):}
+\begin{equation*}
+\begin{aligned}
+  (i,j) \in B_2,\ \boldsymbol{U}(x_i, y_j, t^n)
+  &= \boldsymbol{\Pi}_{i,j}^k \boldsymbol{G}_2^k \boldsymbol{K}_2^k
+    \boldsymbol{S}_2^{k\,-1}
+    (\boldsymbol{S}_1^k \mid \boldsymbol{R}_{S_2}^k)
+    \begin{pmatrix} \boldsymbol{W}_1^k \\ \boldsymbol{\Lambda}^k \end{pmatrix} \\
+  &\phantom{=}\ + O(\Delta x^{k+1})
+\end{aligned}
+\tag{37}
+\end{equation*}
+
+\medskip
+
+\textbf{Note:} Eq 32--33 are on paper p.\ 13 (bottom);
+Eq 34--37 are on paper p.\ 14. The combined paper region shown on
+the left of this PDF spans both pages.
+
+\textbf{Next.} Eq 38--42 (paper p.\ 15) assemble these row-by-row
+Taylor expansions into the over-determined matrix $\boldsymbol{M}$,
+compute its least-squares pseudoinverse, and arrive at the master
+modified-value equation
+$\boldsymbol{U}^*_{I,J} = \boldsymbol{\Pi}_{I,J}^k \boldsymbol{G}_1^k
+\boldsymbol{K}_1^k \bar{\boldsymbol{M}}^{-1} (\boldsymbol{U}^n)_B$.

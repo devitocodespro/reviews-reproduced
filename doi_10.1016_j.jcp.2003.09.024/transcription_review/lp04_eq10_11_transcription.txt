@@ -1,0 +1,33 @@
+Lombard-Piraux 2004, Eq 10-11 (fluid-solid jump conditions, page 8)
+
+Parametrization of Γ: (x(τ), y(τ)), with
+  t = (x', y')      (tangent)
+  n = (-y', x')     (normal)
+
+Jump conditions (Eq 10):
+  [v · n] = 0
+  -p · n = σ · n      (where σ is the solid stress tensor)
+
+Order-0 matrices recovered from (1) and (10) — Eq 11:
+
+         ⎡ -y'   x'    0          ⎤
+  C_1^0 =⎢                         ⎥     (2 × 3 — fluid: v_1, v_2, p)
+         ⎣  0    0    x'² + y'²   ⎦
+
+         ⎡ -y'   x'   0      0       0   ⎤
+  C_2^0 =⎢                                ⎥  (2 × 5 — solid: v_1, v_2, σ_11, σ_12, σ_22)
+         ⎣  0    0    y'²   -2 x' y'  x'² ⎦
+
+  L_1^0 = ( 0   0   0 )                  (1 × 3 — empty for fluid: no BC)
+
+  L_2^0 = ( 0   0   x' y'   y'² - x'²   -x' y' )   (1 × 5 — vanishing tangential shear)
+
+State vectors (Eq 2, 4):
+  U_fluid = (v_1, v_2, p)^T              (3 components)
+  U_solid = (v_1, v_2, σ_11, σ_12, σ_22)^T  (5 components)
+
+Implementation note:
+  C_2^0 row 2: y'² σ_11 - 2 x' y' σ_12 + x'² σ_22  = -p (x'² + y'²)
+    ← this is the normal-stress continuity condition n^T σ n = -p · |t|²
+  L_2^0:        x' y' σ_11 + (y'² - x'²) σ_12 - x' y' σ_22  = 0
+    ← this is the tangential shear: t^T σ n = 0

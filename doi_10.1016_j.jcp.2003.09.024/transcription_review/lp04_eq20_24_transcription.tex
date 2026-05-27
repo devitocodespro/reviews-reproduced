@@ -1,0 +1,74 @@
+\textbf{Lombard \& Piraux 2004 --- Eq 20--24 (compatibility conditions, paper p.\ 11)}
+
+\medskip
+
+\textbf{Fluid side $\Omega_i$ (vorticity null outside $\Gamma$):}
+
+The zeroth-order compatibility is the vorticity-null statement:
+\begin{equation*}
+  \frac{\partial v_1}{\partial y} - \frac{\partial v_2}{\partial x} = 0
+  \tag{20}
+\end{equation*}
+
+Differentiating (20) $(k-1)$ times in $x$ and $y$:
+\begin{equation*}
+  \frac{\partial^k v_1}{\partial x^{k-j-1}\,\partial y^{j+1}}
+  -
+  \frac{\partial^k v_2}{\partial x^{k-j}\,\partial y^{j}}
+  = 0,\quad k \geq 1,\ j = 0, \ldots, k-1
+  \tag{21}
+\end{equation*}
+
+\medskip
+
+\textbf{Solid side $\Omega_i$ (stress-tensor symmetry):}
+
+Define the elastic-coefficient combinations:
+\begin{equation*}
+  \alpha_1 = \frac{c_p^{2}}{4\,(c_p^{2} - c_s^{2})},\qquad
+  \alpha_2 = \frac{2\,c_s^{2} - c_p^{2}}{4\,(c_p^{2} - c_s^{2})}
+  \tag{22}
+\end{equation*}
+
+A necessary and sufficient condition for $\boldsymbol{\sigma}$ symmetry [reference 8]:
+\begin{equation*}
+  \alpha_2 \frac{\partial^2 \sigma_{11}}{\partial x^2}
+  + \alpha_1 \frac{\partial^2 \sigma_{22}}{\partial x^2}
+  - \frac{\partial^2 \sigma_{12}}{\partial x\,\partial y}
+  + \alpha_1 \frac{\partial^2 \sigma_{11}}{\partial y^2}
+  + \alpha_2 \frac{\partial^2 \sigma_{22}}{\partial y^2}
+  = 0
+  \tag{23}
+\end{equation*}
+
+Differentiating (23) $(k-2)$ times in $x$ and $y$:
+\begin{equation*}
+\begin{aligned}
+  \alpha_2 \frac{\partial^k \sigma_{11}}{\partial x^{k-j}\,\partial y^{j}}
+  &+ \alpha_1 \frac{\partial^k \sigma_{22}}{\partial x^{k-j}\,\partial y^{j}}
+  - \frac{\partial^k \sigma_{12}}{\partial x^{k-j-1}\,\partial y^{j+1}} \\
+  &+ \alpha_1 \frac{\partial^k \sigma_{11}}{\partial x^{k-j-2}\,\partial y^{j+2}}
+  + \alpha_2 \frac{\partial^k \sigma_{22}}{\partial x^{k-j-2}\,\partial y^{j+2}}
+  = 0,\quad k \geq 2,\ j = 0, \ldots, k-2
+\end{aligned}
+\tag{24}
+\end{equation*}
+
+\medskip
+
+\textbf{Role in the ESIM pipeline:}
+\begin{itemize}
+  \item (21) and (24) hold at every point in $\Omega_i$, in particular
+    at $P^+$ and $P^-$ near $\Gamma$.
+  \item Compatibility reduces $\boldsymbol{U}_i^k$ to an independent
+    sub-vector $\boldsymbol{V}_i^k$ via $\boldsymbol{U}_i^k = \boldsymbol{G}_i^k\,\boldsymbol{V}_i^k$ (Eq 25).
+  \item Fluid $\boldsymbol{V}_i^k$: $(k+1)(k+3)$ components.\\
+    Solid $\boldsymbol{V}_i^k$: $2k^2 + 8k + 5$ components.
+  \item The full $\boldsymbol{G}_i^k$ matrices are tabulated in Appendix A.
+\end{itemize}
+
+\textbf{Implementation note (for the dipping-line Petrobras case):}
+$\Gamma$ is a single straight line, so $\alpha_1, \alpha_2$ are
+\emph{global} constants (no per-point lookup) and the compatibility
+matrices $\boldsymbol{G}_i^k$ collapse to a single one-shot
+construction.

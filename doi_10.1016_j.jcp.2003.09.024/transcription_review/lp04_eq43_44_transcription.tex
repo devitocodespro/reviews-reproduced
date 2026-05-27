@@ -1,0 +1,84 @@
+\textbf{Lombard \& Piraux 2004 --- Eq 43--44 (time-stepping at irregular points, paper p.\ 16)}
+
+\medskip
+
+\textbf{Setup.} Once all modified values $\boldsymbol{U}^*_{I,J}$
+have been computed at $t^n$ via Eq 42, the irregular points are
+updated using the \emph{same} discrete operator $\boldsymbol{H}$
+as the regular points (Eq 12 elsewhere in the paper) but with
+substituted neighbour values: numerical $\boldsymbol{U}^n$ values
+from same-side neighbours, modified $\boldsymbol{U}^*$ values from
+across-$\Gamma$ neighbours.
+
+\medskip
+
+\textbf{Eq 43 --- per-stencil-leg substitution rule.}
+Denote $\Omega(i, j)$ the medium to which the grid point $(i, j)$
+belongs. For each $(\alpha, \beta)$ offset in the stencil:
+\begin{equation*}
+\begin{aligned}
+  \Omega(i + \alpha, j + \beta) = \Omega(i, j)
+    &\quad \Rightarrow \quad
+    \tilde{\boldsymbol{U}}_{i+\alpha, j+\beta} = \boldsymbol{U}^n_{i+\alpha, j+\beta} \\
+  \Omega(i + \alpha, j + \beta) \neq \Omega(i, j)
+    &\quad \Rightarrow \quad
+    \tilde{\boldsymbol{U}}_{i+\alpha, j+\beta} = \boldsymbol{U}^*_{i+\alpha, j+\beta}
+\end{aligned}
+\tag{43}
+\end{equation*}
+
+\textbf{Eq 44 --- modified update for an irregular point $(i, j)$:}
+\begin{equation*}
+  \boxed{\ \boldsymbol{U}^{n+1}_{i, j}
+  = \boldsymbol{H} \!\left( \tilde{\boldsymbol{U}}_{i+\alpha, j+\beta} \right)\ }
+  \tag{44}
+\end{equation*}
+
+\medskip
+
+\textbf{Key properties (paper's own framing):}
+\begin{itemize}
+  \item \emph{Scheme-agnostic.} Coupling the ESIM with ``a wide
+    class of scheme is automatic: no modification of the scheme
+    is required, and the computation of $\boldsymbol{U}^*_{i,j}$
+    does not depend on the discrete operator $\boldsymbol{H}$.''
+  \item \emph{Sub-cell resolution.} The ESIM encodes the geometry
+    of $\Gamma$: the interface conditions (Eq 19) involve $x'$,
+    $y'$ and their successive derivatives up to $k$-th order at
+    $P$. The Taylor expansions (Eq 35) and (Eq 37) introduce a
+    sub-cell resolution for the position of $P$ within the mesh.
+\end{itemize}
+
+\medskip
+
+\textbf{Implementation pattern for Devito (dipping-line Petrobras):}
+\begin{enumerate}
+  \item \textbf{Identify irregular points} (set-up phase, once):
+    grid points $(i, j)$ whose RSG diagonal stencil
+    $(i \pm 1, j \pm 1)$ crosses $\Gamma$. Already implemented
+    in \texttt{scripts/it\_e\_tier1\_geometry.py}.
+  \item \textbf{Precompute the master matrix} per irregular point:
+    $\boldsymbol{N}_{I, J} := \boldsymbol{\Pi}_{I, J}^k
+    \boldsymbol{G}_1^k \boldsymbol{K}_1^k \bar{\boldsymbol{M}}^{-1}$
+    (one fixed row vector). Because $n$, $t$, $\alpha_1$,
+    $\alpha_2$ are constant along the dipping line, the four
+    sub-matrices are global; $\bar{\boldsymbol{M}}^{-1}$ varies
+    only by the integer cell offset of $B$ relative to $P$.
+  \item \textbf{Each timestep:}
+    \begin{enumerate}
+      \item Gather $(\boldsymbol{U}^n)_B$ from the disk
+        of radius $q$ around each $P$ on the regular grid.
+      \item Compute $\boldsymbol{U}^*_{I, J}
+        = \boldsymbol{N}_{I, J} \cdot (\boldsymbol{U}^n)_B$.
+      \item Apply $\boldsymbol{H}$ at each irregular point using
+        the $\tilde{\boldsymbol{U}}$ substitution rule (Eq 43).
+    \end{enumerate}
+\end{enumerate}
+
+\medskip
+
+\textbf{Note on sides.} For an irregular point on the $\Omega_1$
+side, the master matrix has $\boldsymbol{G}_2^k \boldsymbol{K}_2^k$
+instead of $\boldsymbol{G}_1^k \boldsymbol{K}_1^k$ (Eq 42's swap).
+Both sides have their own irregular-point list and their own
+precomputed $\boldsymbol{N}$ row vectors.

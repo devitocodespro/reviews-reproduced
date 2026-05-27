@@ -1,0 +1,81 @@
+\textbf{Lombard \& Piraux 2004 --- Eq 26--31 (interface coupling, paper p.\ 12)}
+
+\medskip
+
+\textbf{Setup.} Each side $\Omega_i$ has state $\boldsymbol{U}_i^k$
+related to a smaller independent set $\boldsymbol{V}_i^k$ via compatibility
+(Eq 25), and to an even smaller set $\boldsymbol{W}_i^k$ via boundary
+conditions:
+\begin{equation*}
+  \boldsymbol{L}_i^k \boldsymbol{G}_i^k \boldsymbol{V}_i^k = 0
+  \quad \Rightarrow \quad
+  \boldsymbol{V}_i^k = \boldsymbol{K}_i^k \boldsymbol{W}_i^k,
+  \quad i = 1, 2
+  \tag{26}
+\end{equation*}
+$\boldsymbol{K}_i^k$ is built from the SVD of $\boldsymbol{L}_i^k \boldsymbol{G}_i^k$.
+
+\medskip
+
+\textbf{Jump conditions in $\boldsymbol{V}$ form} (insert Eq 25 into Eq 19's
+jump condition):
+\begin{equation*}
+  \boldsymbol{C}_1^k \boldsymbol{G}_1^k \boldsymbol{V}_1^k
+  =
+  \boldsymbol{C}_2^k \boldsymbol{G}_2^k \boldsymbol{V}_2^k
+  \tag{27}
+\end{equation*}
+
+\textbf{Jump conditions in $\boldsymbol{W}$ form} (insert Eq 26):
+\begin{equation*}
+  \boldsymbol{C}_1^k \boldsymbol{G}_1^k \boldsymbol{K}_1^k \boldsymbol{W}_1^k
+  =
+  \boldsymbol{C}_2^k \boldsymbol{G}_2^k \boldsymbol{K}_2^k \boldsymbol{W}_2^k
+  \tag{28}
+\end{equation*}
+
+\medskip
+
+\textbf{Define the compact coupling matrix}:
+\begin{equation*}
+  \boldsymbol{S}_i^k = \boldsymbol{C}_i^k \boldsymbol{G}_i^k \boldsymbol{K}_i^k,
+  \quad i = 1, 2
+  \tag{29}
+\end{equation*}
+yielding
+\begin{equation*}
+  \boldsymbol{S}_1^k \boldsymbol{W}_1^k
+  =
+  \boldsymbol{S}_2^k \boldsymbol{W}_2^k
+  \tag{30}
+\end{equation*}
+
+\medskip
+
+\textbf{SVD resolution of the underdetermined system (30).} Express
+$\boldsymbol{W}_2^k$ in terms of $\boldsymbol{W}_1^k$ and free parameters
+$\boldsymbol{\Lambda}^k$:
+\begin{equation*}
+  \boldsymbol{W}_2^k =
+  \boldsymbol{S}_2^{k\,-1}
+  \begin{pmatrix} \boldsymbol{S}_1^k & \big| & \boldsymbol{R}_{S_2}^k \end{pmatrix}
+  \begin{pmatrix} \boldsymbol{W}_1^k \\ \boldsymbol{\Lambda}^k \end{pmatrix}
+  \tag{31}
+\end{equation*}
+where $\boldsymbol{S}_2^{k\,-1}$ is the SVD-pseudoinverse and
+$\boldsymbol{R}_{S_2}^k$ spans the null-space of
+$\boldsymbol{S}_2^k$.
+
+\medskip
+
+\textbf{Role.}
+\begin{itemize}
+  \item $\boldsymbol{K}_i^k$, $\boldsymbol{S}_i^k$, $\boldsymbol{R}_{S_2}^k$
+    are pre-computed once per interface point from $\boldsymbol{C}_i^k$ +
+    $\boldsymbol{L}_i^k$ + $\boldsymbol{G}_i^k$ (jump + boundary + compatibility).
+  \item For the dipping-line Petrobras case ($n$ and $t$ uniform along
+    $\Gamma$), these matrices are \emph{global constants} — one SVD per
+    order $k$, not per irregular point.
+  \item Eq 31 is consumed by Eq 37 (Taylor expansion on the solid side)
+    in the next section.
+\end{itemize}
