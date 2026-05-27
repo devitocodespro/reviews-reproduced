@@ -1,32 +1,42 @@
 """LP04 plane-interface convergence sweep — full LW + ESIM pipeline.
 
-KNOWN-INCOMPLETE — 2026-05-27: convergence rate is currently ≈ 0 in
-both L^∞ and L^1 (not the paper's expected 2.0). The static
-components are all correct in isolation:
+PARTIAL-COMPLETION STATUS — 2026-05-27 (post BC + label-swap fixes):
+
+All static components are byte-correct in isolation:
   • LW bulk: 2.000 order on homog plane wave (run_reproduction.py)
-  • ESIM projector: cross-validated against parent at fp64
-  • R/T: textbook normal incidence + energy conservation oblique
-But the integrated test has a persistent ~1e3 L^∞ error at the
-irregular cells that does not refine with dx. The L^∞ peak sits
-1 cell from the interface in every resolution.
+  • ESIM projector: paper-faithful per LP04 Eq 41-42 with corrected
+    target-side semantics (SOLID target → fluid extension at solid
+    position, FLUID target → solid extension at fluid position)
+  • R/T analytical reference: textbook R_pp at normal incidence to
+    fp64; energy flux conserved oblique to fp64; v_y + σ_yy
+    continuity at Γ to 1.9e-14 relative (BC verification this
+    session via interface-continuity probe)
 
-Hypothesis: the projector's "smooth solid extension at fluid
-position" (via Taylor expansion of disk-B Eq 41) differs from the
-analytical solid wavefield evaluated at that position by an O(1)
-constant rather than O(dx³). Likely root cause: the LP04
-pressure-sign convention (p = +σ_yy per BC2) means the projector
-outputs σ_yy with a sign that doesn't match the analytical
-reference's σ_yy convention (which is currently σ_yy = -p_fluid).
+The integrated convergence test still fails to reach order 2.
+Error is now in the correct absolute σ-scale (~Z_p · A = 1e7) but
+diverges with refinement (L^∞ order ≈ -1.4). The peak error
+remains at the irregular cells.
 
-Fix path for a future session: write a unit test that compares
-U_star at a fluid irregular cell (via projector) against the
-analytical SOLID evaluated at that same position with consistent
-sign conventions. If they match to O(dx³), the integration is the
-issue; otherwise the projector and analytical disagree on sign.
+Working diagnosis: the per-side LW pass approach (run LW once
+with homog FLUID material on U_tilde_for_fluid; once with homog
+SOLID material on U_tilde_for_solid; combine by side mask) is
+correct in principle for 2nd-order LW (stencil radius 1) since
+only distance-1-from-Γ cells need substitution. But the per-step
+substitution may be amplifying a small spectral instability in
+the LW operator that the static-isolation tests miss. Static
+projector + R/T BCs are correct; the runtime LW × ESIM
+integration coupling needs a separate diagnostic pass.
 
-The LW bulk, the ESIM projector, the R/T, and the per-side LW
-passes are all individually verified. Only the integrated test
-is pending the sign-convention reconciliation.
+Fix path for a future session:
+  1. At t=0 with analytical IC, verify U* at fluid-irregular cells
+     matches analytical-solid-extended-to-fluid-position to
+     O(dx³) (the LP04 truncation order claim for k=2).
+  2. Run ONE LP04 step and inspect σ_yy at irregular cells: is
+     the per-step error O(dx²) as expected, or does it accumulate
+     to O(1) immediately?
+  3. If step-1 fails: bug in projector / coordinate convention.
+  4. If step-2 fails: bug in LW + U_tilde coupling — likely the
+     stencil radius interaction with side mask.
 
 ----
 

@@ -170,7 +170,20 @@ class PlaneWaveAcousticElastic:
 
     def evaluate(self, XX: np.ndarray, YY: np.ndarray, t: float
                   ) -> np.ndarray:
-        """Return (5, Nx, Ny) field at time t."""
+        """Return (5, Nx, Ny) field at time t.
+
+        VELOCITY-AMPLITUDE convention (self-consistent with BC system,
+        post-2026-05-27 fix): A is the incident velocity amplitude
+        (V_inc). Pressures/stresses follow from velocity:
+          fluid:  p = Z_f · V · F   (so σ_yy = −p)
+          solid P: σ_ij = −(V_tp/c_p)(λ δ_ij + 2μ n_i n_j) · F
+          solid SV: σ_ij = −(μ V_ts/c_s)(pol_j n_i + pol_i n_j) · F
+        with n_tp = (s_tp, −c_tp), pol_SV = (c_ts, s_ts), n_SV =
+        (s_ts, −c_ts).
+
+        At Γ this gives BC-consistent matching of v_y and σ_yy (verified
+        post-fix against tests/test_rt_interface_continuity.py).
+        """
         info = self._angles_and_coeffs()
         R_pp = info['R_pp']
         T_pp = info['T_pp']
@@ -181,67 +194,63 @@ class PlaneWaveAcousticElastic:
         U = np.zeros((5,) + XX.shape, dtype=np.float64)
         in_fluid = YY > self.y_interface
         in_solid = ~in_fluid
-        # Incident: propagation direction (+s_inc, −c_inc), phase
-        # argument arg_i = ω(t − ((s_inc) X + (−c_inc) (Y − y_Γ))/c_f).
-        # The interface at y = y_interface is the reference plane.
         dY = YY - self.y_interface
-        # Incident in fluid (down-going)
-        arg_i = self.omega * (t - (s_inc * XX + (-c_inc) * dY) / self.c_f) + self.phase
-        p_inc = self.A * np.sin(arg_i)
-        # Reflected in fluid (up-going)
-        arg_r = self.omega * (t - (s_inc * XX + (c_inc) * dY) / self.c_f) + self.phase
-        p_ref = R_pp * self.A * np.sin(arg_r)
-        # In fluid, p_total = p_inc + p_ref
-        p_fluid = p_inc + p_ref
-        # v_x in fluid: incident contributes s_inc · p / (ρ_f c_f);
-        # reflected contributes s_inc · p_ref / (ρ_f c_f) (same x-direction
-        # since x-component of n̂ is +s_inc for both incident and reflected).
-        vx_fluid = (s_inc * (p_inc + p_ref)) / (self.rho_f * self.c_f)
-        # v_y: incident is −c_inc / (ρ_f c_f) · p_inc;
-        # reflected is +c_inc / (ρ_f c_f) · p_ref.
-        vy_fluid = ((-c_inc) * p_inc + (c_inc) * p_ref) / (self.rho_f * self.c_f)
-        # σ_xx = σ_yy = -p in fluid degenerate-solid layout, σ_xy = 0
-        # Mask-fill
+        Z_f = self.rho_f * self.c_f
+        lam_s = (self.rho_s * self.c_p ** 2
+                  - 2 * self.rho_s * self.c_s ** 2)
+        mu_s = self.rho_s * self.c_s ** 2
+
+        # Phase factors for each wave
+        arg_i = (self.omega * (t - (s_inc * XX + (-c_inc) * dY) / self.c_f)
+                  + self.phase)
+        sin_i = np.sin(arg_i)
+        arg_r = (self.omega * (t - (s_inc * XX + c_inc * dY) / self.c_f)
+                  + self.phase)
+        sin_r = np.sin(arg_r)
+        arg_tp = (self.omega * (t - (s_tp * XX + (-c_tp) * dY) / self.c_p)
+                   + self.phase)
+        sin_tp = np.sin(arg_tp)
+        arg_ts = (self.omega * (t - (s_ts * XX + (-c_ts) * dY) / self.c_s)
+                   + self.phase)
+        sin_ts = np.sin(arg_ts)
+
+        # Fluid (velocity-amplitude convention): v = V·n̂·F.
+        # Incident: V·(s_inc, -c_inc)·sin_i. Reflected: R·V·(s_inc, +c_inc)·sin_r.
+        vx_fluid = self.A * (s_inc * sin_i + s_inc * R_pp * sin_r)
+        vy_fluid = self.A * ((-c_inc) * sin_i + c_inc * R_pp * sin_r)
+        # Pressure = Z_f · V (scalar, positive in compressive convention).
+        p_fluid = Z_f * self.A * (sin_i + R_pp * sin_r)
+
         U[0] = np.where(in_fluid, vx_fluid, 0.0)
         U[1] = np.where(in_fluid, vy_fluid, 0.0)
         U[2] = np.where(in_fluid, -p_fluid, 0.0)
         U[3] = np.where(in_fluid, 0.0, 0.0)
         U[4] = np.where(in_fluid, -p_fluid, 0.0)
-        # Transmitted P in solid (down-going, direction (+s_tp, −c_tp))
-        arg_tp = self.omega * (t - (s_tp * XX + (-c_tp) * dY) / self.c_p) + self.phase
-        A_P = T_pp * self.A
-        amp_tp = A_P * np.sin(arg_tp)
-        # Transmitted SV in solid (down-going, polarization ⊥ propagation)
-        arg_ts = self.omega * (t - (s_ts * XX + (-c_ts) * dY) / self.c_s) + self.phase
-        A_SV = T_ps * self.A
-        amp_ts = A_SV * np.sin(arg_ts)
-        # Velocities and stresses in solid:
-        #   P wave with amplitude A_P propagating at angle θ_tp from −y:
-        #     v_x_P = (A_P / (ρ_s c_p)) s_tp
-        #     v_y_P = (A_P / (ρ_s c_p)) (-c_tp)
-        #     σ_xx_P = -(λ + 2μ s_tp²) A_P / (ρ_s c_p)
-        #     σ_yy_P = -(λ + 2μ c_tp²) A_P / (ρ_s c_p)
-        #     σ_xy_P = (2μ s_tp c_tp) A_P / (ρ_s c_p)
-        #   SV wave with amplitude A_SV: polarization is perpendicular to
-        #     propagation direction. Propagation = (s_ts, -c_ts);
-        #     polarization = (c_ts, s_ts) (rotated 90° from propagation).
-        #     v_x_SV = (A_SV / (ρ_s c_s)) c_ts
-        #     v_y_SV = (A_SV / (ρ_s c_s)) s_ts
-        #     σ_xy_SV = μ (cos²θ_ts − sin²θ_ts) / (ρ_s c_s) · A_SV
-        #     σ_xx_SV = +2μ s_ts c_ts / (ρ_s c_s) · A_SV
-        #     σ_yy_SV = −2μ s_ts c_ts / (ρ_s c_s) · A_SV
-        lam_s = self.rho_s * self.c_p ** 2 - 2 * self.rho_s * self.c_s ** 2
-        mu_s = self.rho_s * self.c_s ** 2
-        vx_P = amp_tp * s_tp / (self.rho_s * self.c_p)
-        vy_P = amp_tp * (-c_tp) / (self.rho_s * self.c_p)
-        sigma_xx_P = -amp_tp * (lam_s + 2 * mu_s * s_tp ** 2) / (self.rho_s * self.c_p)
-        sigma_yy_P = -amp_tp * (lam_s + 2 * mu_s * c_tp ** 2) / (self.rho_s * self.c_p)
-        sigma_xy_P = amp_tp * (2 * mu_s * s_tp * c_tp) / (self.rho_s * self.c_p)
-        vx_SV = amp_ts * c_ts / (self.rho_s * self.c_s)
-        vy_SV = amp_ts * s_ts / (self.rho_s * self.c_s)
-        sigma_xx_SV = amp_ts * (2 * mu_s * s_ts * c_ts) / (self.rho_s * self.c_s)
-        sigma_yy_SV = -amp_ts * (2 * mu_s * s_ts * c_ts) / (self.rho_s * self.c_s)
-        sigma_xy_SV = amp_ts * (mu_s * (c_ts ** 2 - s_ts ** 2)) / (self.rho_s * self.c_s)
+
+        # Solid P-wave (velocity-amplitude V_tp = T_pp · A):
+        V_tp = T_pp * self.A
+        vx_P = V_tp * s_tp * sin_tp
+        vy_P = V_tp * (-c_tp) * sin_tp
+        sigma_xx_P = -(V_tp / self.c_p) * (lam_s + 2 * mu_s * s_tp ** 2) * sin_tp
+        sigma_yy_P = -(V_tp / self.c_p) * (lam_s + 2 * mu_s * c_tp ** 2) * sin_tp
+        # σ_xy_P: n_tp = (s_tp, -c_tp), so 2μ n_x n_y = 2μ s_tp (-c_tp) = -2μ s_tp c_tp
+        # σ_xy_P = -(V_tp/c_p) · (-2μ s_tp c_tp) = +(V_tp/c_p) · 2μ s_tp c_tp
+        sigma_xy_P = (V_tp / self.c_p) * 2 * mu_s * s_tp * c_tp * sin_tp
+
+        # Solid SV-wave (velocity-amplitude V_ts = T_ps · A,
+        # polarization (c_ts, s_ts) perpendicular to n_ts = (s_ts, -c_ts)):
+        V_ts = T_ps * self.A
+        vx_SV = V_ts * c_ts * sin_ts
+        vy_SV = V_ts * s_ts * sin_ts
+        # σ_xx_SV = -(μ V/c_s) · 2 · pol_x n_x = -(μ V/c_s) · 2 · c_ts s_ts
+        sigma_xx_SV = -(mu_s * V_ts / self.c_s) * 2 * c_ts * s_ts * sin_ts
+        # σ_yy_SV = -(μ V/c_s) · 2 · pol_y n_y = -(μ V/c_s) · 2 · s_ts (-c_ts) = +(μ V/c_s) · 2 s_ts c_ts
+        sigma_yy_SV = +(mu_s * V_ts / self.c_s) * 2 * s_ts * c_ts * sin_ts
+        # σ_xy_SV = -(μ V/c_s)(pol_y n_x + pol_x n_y)
+        #         = -(μ V/c_s)(s_ts · s_ts + c_ts · (-c_ts))
+        #         = -(μ V/c_s)(s_ts² - c_ts²) = +(μ V/c_s)(c_ts² - s_ts²)
+        sigma_xy_SV = (mu_s * V_ts / self.c_s) * (c_ts ** 2 - s_ts ** 2) * sin_ts
+
         U[0] += np.where(in_solid, vx_P + vx_SV, 0.0)
         U[1] += np.where(in_solid, vy_P + vy_SV, 0.0)
         U[2] += np.where(in_solid, sigma_xx_P + sigma_xx_SV, 0.0)
