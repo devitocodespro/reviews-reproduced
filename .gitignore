@@ -2,6 +2,9 @@
 **/.venv/
 **/__pycache__/
 **/*.pyc
+# Python build artifacts (egg-info from `pip install -e` /
+# `uv sync` of editable-dep reproduction packages)
+**/*.egg-info/
 
 # Local CLAUDE.md (recursive, per ~/CLAUDE.md rule). The top-level
 # CLAUDE.md is the EXCEPTION — it documents the reproduction

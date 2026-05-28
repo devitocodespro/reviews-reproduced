@@ -1,0 +1,18 @@
+[project]
+name = "bader_2023"
+version = "0.1.0"
+description = "Bader, Almquist & Dunham (2023) SBP-SAT acoustic-elastic coupling — reproduction modules"
+authors = [{ name = "Gerard Gorman", email = "gerard@devitocodes.com" }]
+requires-python = ">=3.10,<3.14"
+
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.13",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bader_2023*"]
