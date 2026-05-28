@@ -1,0 +1,34 @@
+\noindent\textbf{Yang, Yan \& Liu (2015) \emph{J. Appl. Geophys.} 122:40--52 — Eq~4 (p.~41)}
+
+\smallskip
+
+\noindent The Bond rotation matrix $R$ (per Liu et al.~1998), parametrised
+by azimuth $\varphi$ and tilt $\theta$. Rotates Voigt stiffness from the
+natural to the observation coordinate system: $D = R\,C\,R^T$.
+
+\smallskip
+
+\begin{equation*}
+R =
+{\scriptsize
+\begin{bmatrix}
+\cos^2\!\varphi               & \sin^2\!\varphi\cos^2\!\theta         & \sin^2\!\varphi\sin^2\!\theta         & -\sin^2\!\varphi\sin 2\theta            & \sin 2\varphi\sin\theta         & -\sin 2\varphi\cos\theta            \\[2pt]
+\sin^2\!\varphi               & \cos^2\!\varphi\cos^2\!\theta         & \cos^2\!\varphi\sin^2\!\theta         & -\cos^2\!\varphi\sin 2\theta            & -\sin 2\varphi\sin\theta        & \sin 2\varphi\cos\theta             \\[2pt]
+0                              & \sin^2\!\theta                         & \cos^2\!\theta                         & \sin 2\theta                              & 0                                & 0                                    \\[2pt]
+0                              & \tfrac{1}{2}\cos\varphi\sin 2\theta   & -\tfrac{1}{2}\cos\varphi\sin 2\theta  & \cos\varphi\cos 2\theta                  & \sin\varphi\cos\theta            & \sin\varphi\sin\theta               \\[2pt]
+0                              & -\tfrac{1}{2}\sin\varphi\sin 2\theta  & \tfrac{1}{2}\sin\varphi\sin 2\theta   & -\sin\varphi\cos 2\theta                 & \cos\varphi\cos\theta            & \cos\varphi\sin\theta               \\[2pt]
+\tfrac{1}{2}\sin 2\varphi      & -\tfrac{1}{2}\sin 2\varphi\cos^2\!\theta & -\tfrac{1}{2}\sin 2\varphi\sin^2\!\theta & \tfrac{1}{2}\sin 2\varphi\sin 2\theta & -\cos 2\varphi\sin\theta         & \cos 2\varphi\cos\theta
+\end{bmatrix},
+\tag{4}}
+\end{equation*}
+
+\smallskip
+
+\noindent\textit{Notation per paper p.~41:}
+$\varphi$ is the azimuth angle;
+$\theta$ is the tilt angle.
+
+\smallskip
+
+\noindent\textit{Smoke-checks for transcription:} at $\varphi=0$ and $\theta=0$,
+$R$ should reduce to identity (modulo Voigt-row-4--6 factor-of-2 convention).

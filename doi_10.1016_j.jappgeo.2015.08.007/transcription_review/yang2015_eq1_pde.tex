@@ -1,0 +1,67 @@
+\noindent\textbf{Yang, Yan \& Liu (2015) \emph{J. Appl. Geophys.} 122:40--52 — Eq~1 (p.~41)}
+
+\smallskip
+
+\noindent 2D RSG--TTI elastic conservation form (3-component velocity $(v_x, v_y, v_z)$, 5 stress components):
+
+\smallskip
+
+\begin{align}
+\frac{\partial v_x}{\partial t} &= \frac{1}{\rho}\frac{\partial \sigma_{xx}}{\partial x}
+                                 + \frac{1}{\rho}\frac{\partial \sigma_{xz}}{\partial z},
+\tag{1a}\\[3pt]
+\frac{\partial v_y}{\partial t} &= \frac{1}{\rho}\frac{\partial \sigma_{xy}}{\partial x}
+                                 + \frac{1}{\rho}\frac{\partial \sigma_{yz}}{\partial z},
+\tag{1b}\\[3pt]
+\frac{\partial v_z}{\partial t} &= \frac{1}{\rho}\frac{\partial \sigma_{xz}}{\partial x}
+                                 + \frac{1}{\rho}\frac{\partial \sigma_{zz}}{\partial z},
+\tag{1c}\\[3pt]
+\frac{\partial \sigma_{xx}}{\partial t}
+   &= d_{11}\frac{\partial v_x}{\partial x}
+     + d_{13}\frac{\partial v_z}{\partial z}
+     + d_{14}\frac{\partial v_y}{\partial z}
+     + d_{15}\!\left(\frac{\partial v_x}{\partial z}
+                     + \frac{\partial v_z}{\partial x}\right)
+     + d_{16}\frac{\partial v_y}{\partial x},
+\tag{1d}\\[3pt]
+\frac{\partial \sigma_{zz}}{\partial t}
+   &= d_{13}\frac{\partial v_x}{\partial x}
+     + d_{33}\frac{\partial v_z}{\partial z}
+     + d_{34}\frac{\partial v_y}{\partial z}
+     + d_{35}\!\left(\frac{\partial v_x}{\partial z}
+                     + \frac{\partial v_z}{\partial x}\right)
+     + d_{36}\frac{\partial v_y}{\partial x},
+\tag{1e}\\[3pt]
+\frac{\partial \sigma_{yz}}{\partial t}
+   &= d_{14}\frac{\partial v_x}{\partial x}
+     + d_{34}\frac{\partial v_z}{\partial z}
+     + d_{44}\frac{\partial v_y}{\partial z}
+     + d_{45}\!\left(\frac{\partial v_x}{\partial z}
+                     + \frac{\partial v_z}{\partial x}\right)
+     + d_{46}\frac{\partial v_y}{\partial x},
+\tag{1f}\\[3pt]
+\frac{\partial \sigma_{xz}}{\partial t}
+   &= d_{15}\frac{\partial v_x}{\partial x}
+     + d_{35}\frac{\partial v_z}{\partial z}
+     + d_{45}\frac{\partial v_y}{\partial z}
+     + d_{55}\!\left(\frac{\partial v_x}{\partial z}
+                     + \frac{\partial v_z}{\partial x}\right)
+     + d_{56}\frac{\partial v_y}{\partial x},
+\tag{1g}\\[3pt]
+\frac{\partial \sigma_{xy}}{\partial t}
+   &= d_{16}\frac{\partial v_x}{\partial x}
+     + d_{36}\frac{\partial v_z}{\partial z}
+     + d_{46}\frac{\partial v_y}{\partial z}
+     + d_{56}\!\left(\frac{\partial v_x}{\partial z}
+                     + \frac{\partial v_z}{\partial x}\right)
+     + d_{66}\frac{\partial v_y}{\partial x}.
+\tag{1h}
+\end{align}
+
+\noindent\textit{Notation per paper p.~41:}
+$\rho$ = density;
+$(v_x, v_y, v_z)$ = velocity (3-comp);
+$(\sigma_{xx}, \sigma_{zz})$ = normal-stress (in-plane);
+$(\sigma_{yz}, \sigma_{xz}, \sigma_{xy})$ = shear-stress.
+$D = [d_{ij}]_{6\times 6}$ is the elastic-parameter matrix in the observation
+coordinate system (Eq~2: $D = R\,C\,R^T$ per Winterstein 1990).

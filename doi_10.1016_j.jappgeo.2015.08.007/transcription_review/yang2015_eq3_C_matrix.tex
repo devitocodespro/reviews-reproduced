@@ -1,0 +1,37 @@
+\noindent\textbf{Yang, Yan \& Liu (2015) \emph{J. Appl. Geophys.} 122:40--52 — Eq~3 (p.~41)}
+
+\smallskip
+
+\noindent The elastic parameter matrix $C = [c_{ij}]_{6\times 6}$ in the natural
+(VTI-symmetric) coordinate system:
+
+\smallskip
+
+\begin{equation}
+C =
+\begin{bmatrix}
+c_{11} & c_{12} & c_{13} & 0      & 0      & 0     \\
+c_{12} & c_{11} & c_{13} & 0      & 0      & 0     \\
+c_{13} & c_{13} & c_{33} & 0      & 0      & 0     \\
+0      & 0      & 0      & c_{44} & 0      & 0     \\
+0      & 0      & 0      & 0      & c_{44} & 0     \\
+0      & 0      & 0      & 0      & 0      & c_{66}
+\end{bmatrix},
+\tag{3}
+\end{equation}
+
+\smallskip
+
+\noindent with the VTI constraint (paper p.~41):
+
+\begin{equation*}
+c_{66} = \tfrac{1}{2}(c_{11} - c_{12}).
+\end{equation*}
+
+\smallskip
+
+\noindent\textit{Five independent VTI parameters:}
+$c_{11}, c_{12}, c_{13}, c_{33}, c_{44}$ (with $c_{66}$ derived).
+This is the natural-axis Voigt stiffness BEFORE Bond-rotation to the
+observation coordinate system. The observation-frame stiffness $D$ is
+$D = R\,C\,R^T$ (Eq~2; $R$ defined in Eq~4).
