@@ -1,0 +1,17 @@
+[project]
+name = "moczo_2002"
+version = "0.1.0"
+description = "Moczo et al. (2002) BSSA 3D heterogeneous staggered-grid effective-medium averaging — reproduction"
+authors = [{ name = "Gerard Gorman", email = "gerard@devitocodes.com" }]
+requires-python = ">=3.10,<3.14"
+
+dependencies = [
+    "numpy>=1.26",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["moczo_2002*"]
