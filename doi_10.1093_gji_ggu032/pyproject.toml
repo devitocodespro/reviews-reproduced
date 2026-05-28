@@ -1,0 +1,18 @@
+[project]
+name = "liu_2014"
+version = "0.1.0"
+description = "Liu (2014) GJI optimal staggered-grid FD coefficients — reproduction (with Fornberg 1988 + Jiang-Zhang 2021 co-anchors)"
+authors = [{ name = "Gerard Gorman", email = "gerard@devitocodes.com" }]
+requires-python = ">=3.10,<3.14"
+
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.13",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["liu_2014*"]
