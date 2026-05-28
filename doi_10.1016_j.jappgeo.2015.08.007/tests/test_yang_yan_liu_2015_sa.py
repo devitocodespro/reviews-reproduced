@@ -1,4 +1,4 @@
-"""Yang/Yan/Liu 2015 *Geophys. Prospect.* — SA-method byte-match gate.
+"""Yang/Yan/Liu 2015 *Geophys. Prospect.* — SA-method paper-print-precision gate.
 
 Independent reproduction of Yang/Yan/Liu 2015 GP §"Optimal implicit
 SGFD coefficients based on SA method" Eq 1-8. Verifies that
@@ -37,7 +37,7 @@ from yang_yan_liu_2015_sa import (  # noqa: E402
 
 
 # Paper precision: Table 1 prints at 7 significant figures (xxx.xxxxxxE±NN).
-# Use 5e-7 absolute tolerance for byte-match.
+# Use 5e-7 absolute tolerance for paper-precision match.
 PAPER_BYTE_MATCH_TOL = 5e-7
 
 U_CANONICAL = 1.25   # Per Table 1 caption
@@ -49,7 +49,7 @@ def test_solve_matches_table_1_at_u_1p25(M: int):
     Yang/Yan/Liu 2015 GP Table 1 row M to 7 sig figs.
 
     Load-bearing test — if it fails, either the closed-form Eq 8
-    solver has a bug OR the byte-transcribed Table 1 is wrong.
+    solver has a bug OR the hand-transcribed Table 1 is wrong.
     """
     a_computed, b_computed = solve_yang_yan_liu_2015_sa(M, U_CANONICAL)
     row = YYL_2015_GP_TABLE_1_U_1P25[M]
@@ -73,7 +73,7 @@ def test_solve_matches_table_1_at_u_1p25(M: int):
     fail = bool(bad_a) or b_diff > PAPER_BYTE_MATCH_TOL
 
     assert not fail, (
-        f"M={M}, u={U_CANONICAL}: SA byte-match FAIL.\n"
+        f"M={M}, u={U_CANONICAL}: SA paper-precision match FAIL.\n"
         f"  b: computed={b_computed:.7e}  paper={b_paper:.7e}  "
         f"|diff|={b_diff:.3e}\n"
         + ("  a-coefficients differ at: "

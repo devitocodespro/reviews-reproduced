@@ -1,6 +1,6 @@
 """Yang 2015 — paper-tables invariant gates.
 
-Verifies the byte-transcribed Yang 2015 *J. Appl. Geophys.* Eq 1, 3, 4
+Verifies the hand-transcribed Yang 2015 *J. Appl. Geophys.* Eq 1, 3, 4
 matrices satisfy structural + algebraic invariants. Closes pre-flight
 dual-reviewer YF1 (Codex Q2 + Gemini Q2 both DISAGREE on initial test
 set being insufficient). Adds:

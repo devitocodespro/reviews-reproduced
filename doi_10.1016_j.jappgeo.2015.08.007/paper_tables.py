@@ -1,4 +1,4 @@
-"""Yang, Yan & Liu (2015) — byte-transcribed paper constants.
+"""Yang, Yan & Liu (2015) — hand-transcribed paper constants.
 
 DOI 10.1016/j.jappgeo.2015.08.007 · *J. Appl. Geophys.* 122:40-52
 

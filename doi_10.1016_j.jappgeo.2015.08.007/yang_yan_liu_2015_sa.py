@@ -29,7 +29,7 @@ the specific linear system differs:
   no b since explicit operator has no adjustable parameter).
 
 This module reproduces the IMPLICIT antecedent. Verifying it
-byte-matches the antecedent's Table 1 validates the SA principle.
+matches the antecedent's Table 1 validates the SA principle.
 Yang 2015 J.Appl.Geophys. SA coefficients will then use the
 same idea adapted to the RSG-TTI dispersion relation.
 

@@ -9,7 +9,7 @@ Regenerates the canonical reference outputs:
     coefficients at u=1.10 (scipy quad + linear solve)
   reference_outputs/yang2015_table_4_dispersion_u.json — §4 RMS
     dispersion error u-values for ε ∈ {1e-6, 1e-5, 1e-4, 1e-3} ×
-    M=2..11 × {TE, SA, LS} (120-cell byte-match anchor)
+    M=2..11 × {TE, SA, LS} (120-cell paper-print-precision anchor)
   reference_outputs/yang2015_dispersion_curves_m10_u1p10.json —
     dispersion curve δ_M(β) data for M=10 at u=1.10, replicating
     Yang 2015 Fig 7 sampling.

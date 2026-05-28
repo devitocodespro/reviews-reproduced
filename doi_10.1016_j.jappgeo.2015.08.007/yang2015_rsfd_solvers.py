@@ -62,7 +62,7 @@ def solve_te_rsfd(M: int) -> np.ndarray:
     because the Vandermonde of odd powers is exponentially ill-
     conditioned in M — fp64 solve loses ~6 sig figs at M=11. Sympy
     rational solve produces exact-then-rounded coefficients that
-    byte-match the paper's printed Table 1 to 7 sig figs.
+    match the paper's printed Table 1 to 7 sig figs.
 
     Parameters
     ----------
@@ -131,7 +131,7 @@ def solve_sa_rsfd(M: int, u: float) -> np.ndarray:
     # Sample at β(j) = (j-1)·u/(M-1) for j=2..M (M-1 points).
     # The paper uses β(1) = 0 (Eq 17 constraint) + M-1 evenly-spaced
     # points β(2), β(3), ..., β(M) up to β(M) = u. Verified empirically
-    # to byte-match Yang 2015 Table 2 (SA) at u=1.10 for all M=2..11.
+    # to match Yang 2015 Table 2 (SA) at u=1.10 for all M=2..11.
     betas = np.array([(j - 1) * u / (M - 1) for j in range(2, M + 1)],
                       dtype=np.float64)
 
@@ -208,7 +208,7 @@ def solve_ls_rsfd(M: int, u: float) -> np.ndarray:
     return np.concatenate([[a_1], a_rest])
 
 
-# ─── Yang 2015 Tables 1-3 byte-transcribed values ─────────────────────
+# ─── Yang 2015 Tables 1-3 hand-transcribed values ─────────────────────
 
 # Source: Yang 2015 J. Appl. Geophys. 122:40-52, paper pages 43-44.
 # Each entry transcribed from the PDF under side-by-side review
@@ -250,18 +250,26 @@ YANG_2015_TABLE_2_SA_U_1P10: dict[int, tuple[float, ...]] = {
     3: (1.227062e+0, -9.641949e-2, 1.243930e-2),
     4: (1.234996e+0, -1.059046e-1, 2.056187e-2, -2.870219e-3),
     5: (1.241258e+0, -1.117645e-1, 2.536470e-2, -5.669177e-3, 7.662654e-4),
+    # Phase Y/1.5b 2026-05-28: a6 was mis-transcribed as -2.226400e-4;
+    # paper Table 2 (page 43) prints -2.226460e-4 (trailing 0 should be 6).
     6: (1.245920e+0, -1.159598e-1, 2.867786e-2, -7.822755e-3, 1.753131e-3,
-        -2.226400e-4),
+        -2.226460e-4),
     7: (1.249453e+0, -1.191243e-1, 3.118437e-2, -9.524111e-3, 2.681605e-3,
         -5.778290e-4, 6.837094e-5),
-    8: (1.252209e+0, -1.215958e-1, 3.316826e-2, -1.091945e-2, 3.512563e-3,
+    # Phase Y/1.5b 2026-05-28: a1 was mis-transcribed as 1.252209e+0;
+    # paper Table 2 (page 43) prints 1.252200e+0 — single-digit typo fix.
+    8: (1.252200e+0, -1.215958e-1, 3.316826e-2, -1.091945e-2, 3.512563e-3,
         -9.709608e-4, 1.982285e-4, -2.182960e-5),
-    9: (1.254399e+0, -1.235782e-1, 3.478415e-2, -1.209140e-2, 4.253120e-3,
+    # Phase Y/1.5b 2026-05-28: a1 was mis-transcribed as 1.254399e+0;
+    # paper Table 2 (page 43) prints 1.254390e+0 (transposed last 2 digits).
+    9: (1.254390e+0, -1.235782e-1, 3.478415e-2, -1.209140e-2, 4.253120e-3,
         -1.364307e-3, 3.630081e-4, -6.987798e-5, 7.174235e-6),
     10: (1.256173e+0, -1.252030e-1, 3.612810e-2, -1.309224e-2, 4.914807e-3,
          -1.743967e-3, 5.452040e-4, -1.384972e-4, 2.511851e-5, -2.410968e-6),
+    # Phase Y/1.5b 2026-05-28: a6 was mis-transcribed as -2.104651e-3;
+    # paper Table 2 (page 43) prints -2.104565e-3 (transposed digits).
     11: (1.257652e+0, -1.265585e-1, 3.726438e-2, -1.395795e-2, 5.508351e-3,
-         -2.104651e-3, 7.347689e-4, -2.215383e-4, 5.356334e-5, -9.162103e-6,
+         -2.104565e-3, 7.347689e-4, -2.215383e-4, 5.356334e-5, -9.162103e-6,
          8.247187e-7),
 }
 
@@ -270,17 +278,27 @@ YANG_2015_TABLE_3_LS_U_1P10: dict[int, tuple[float, ...]] = {
     3: (1.220278e+0, -9.501921e-2, 1.295599e-2),
     4: (1.234822e+0, -1.063796e-1, 2.192849e-2, -3.618001e-3),
     5: (1.242970e+0, -1.134665e-1, 2.685699e-2, -6.762350e-3, 1.164592e-3),
-    6: (1.248264e+0, -1.180369e-1, 3.043095e-2, -8.998313e-3, 2.381875e-3,
+    # Phase Y/1.5b 2026-05-28: a2 + a3 were mis-transcribed; paper Table 3
+    # (page 44) prints a2 = -1.180869e-1 and a3 = 3.040395e-2.
+    6: (1.248264e+0, -1.180869e-1, 3.040395e-2, -8.998313e-3, 2.381875e-3,
         -4.065231e-4),
-    7: (1.251971e+0, -1.213927e-1, 3.300418e-2, -1.079739e-2, 3.418601e-3,
+    # Phase Y/1.5b 2026-05-28: a5 was mis-transcribed; paper Table 3 (page 44)
+    # prints a5 = 3.418801e-3 (code had 3.418601e-3, single-digit typo).
+    7: (1.251971e+0, -1.213927e-1, 3.300418e-2, -1.079739e-2, 3.418801e-3,
         -9.040881e-4, 1.495573e-4),
     8: (1.254716e+0, -1.238695e-1, 3.501448e-2, -1.224628e-2, 4.336199e-3,
         -1.391068e-3, 3.597311e-4, -5.708811e-5),
-    9: (1.256831e+0, -1.257785e-1, 3.661340e-2, -1.344395e-2, 5.135864e-3,
+    # Phase Y/1.5b 2026-05-28: a2 was mis-transcribed; paper Table 3 (page 44)
+    # prints a2 = -1.257985e-1 (code had -1.257785e-1, single-digit typo).
+    9: (1.256831e+0, -1.257985e-1, 3.661340e-2, -1.344395e-2, 5.135864e-3,
         -1.859480e-3, 5.902296e-4, -1.477947e-4, 2.239569e-5),
-    10: (1.258511e+0, -1.273438e-1, 3.791767e-2, -1.444897e-2, 5.837558e-3,
+    # Phase Y/1.5b 2026-05-28: a5 was mis-transcribed; paper Table 3 (page 44)
+    # prints a5 = 5.837516e-3 (code had 5.837558e-3, transposed digits).
+    10: (1.258511e+0, -1.273438e-1, 3.791767e-2, -1.444897e-2, 5.837516e-3,
          -2.296991e-3, 8.292283e-4, -2.574460e-4, 6.213162e-5, -8.973453e-6),
+    # Phase Y/1.5b 2026-05-28: a10 was mis-transcribed as -2.657193e-5;
+    # paper Table 3 (page 44) prints -2.657198e-5 (single-digit typo).
     11: (1.259879e+0, -1.286104e-1, 3.900231e-2, -1.530476e-2, 6.455769e-3,
-         -2.702282e-3, 1.066726e-3, -3.791922e-4, 1.144707e-4, -2.657193e-5,
+         -2.702282e-3, 1.066726e-3, -3.791922e-4, 1.144707e-4, -2.657198e-5,
          3.656647e-6),
 }

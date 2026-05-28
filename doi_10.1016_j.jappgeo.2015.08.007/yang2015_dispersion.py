@@ -13,15 +13,22 @@ operator length M. The paper's quantitative anchor is **Table 4**
 (p. 45): u values at which ε first hits the thresholds {10⁻⁶, 10⁻⁵,
 10⁻⁴, 10⁻³}, tabulated across M = 2..11 × {TE, SA, LS} = 120 entries.
 
-Y.6 byte-match strategy
------------------------
+Y.6 paper-print-precision strategy
+----------------------------------
 For each (ε_target, M, scheme):
-  1. Compute a_m via `solve_te/sa/ls_rsfd` (already byte-matched
-     against Tables 1-3).
+  1. Compute a_m via `solve_te/sa/ls_rsfd` (already validated against
+     Tables 1-3 to per-method tolerances 5e-7 / 1e-5 / 1e-4 per
+     `PAPER_BYTE_MATCH_TOL_*`).
   2. Find the u where ε(M, u; scheme) = ε_target via binary search
      on u ∈ (0, π/2].
-  3. Byte-match against paper Table 4 value (paper precision: 2
-     decimal places ≡ 0.005 tolerance).
+  3. Match against paper Table 4 value to paper-print precision
+     (2 decimal places ± 0.012 tolerance per `TABLE_4_TOL` —
+     absorbs binary-search + integration noise on top of the
+     paper's 0.005 rounding bound).
+
+NOTE (Phase Y/1.5b 2026-05-28): the "byte-match" framing previously
+used in this docstring has been relabeled to "paper-print-precision
+match" since the matching is tolerance-bounded, not byte-equal.
 
 Qualitative invariants per YF3:
   - u_TE < u_SA < u_LS at every (ε, M)
@@ -141,7 +148,7 @@ def find_u_for_target_error(M: int,
     return float(brentq(f, u_min, u_max, xtol=1e-4, maxiter=100))
 
 
-# ─── Table 4 (Yang 2015 p. 45) byte-transcribed ───────────────────────
+# ─── Table 4 (Yang 2015 p. 45) hand-transcribed ───────────────────────
 
 # Format: YANG_2015_TABLE_4[eps_target][M] = {"TE": u_TE, "SA": u_SA, "LS": u_LS}
 # Precision: 2 decimal places as printed.

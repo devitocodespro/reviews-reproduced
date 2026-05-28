@@ -1,13 +1,17 @@
-"""Yang 2015 §4 dispersion-error gate — Table 4 byte-match + qualitative
-ordering invariants.
+"""Yang 2015 §4 dispersion-error gate — Table 4 paper-print-precision
+match + qualitative ordering invariants.
 
 Closes pre-flight dual-reviewer YF3 (Codex + Gemini both DISAGREE on
-k_cross byte-match — use **qualitative ordering + envelope** instead).
+strict k_cross byte-equality — use **qualitative ordering +
+envelope** instead).
 
 Table 4 (paper page 45) gives u-values at which the RMS dispersion
 error ε first hits {10⁻⁶, 10⁻⁵, 10⁻⁴, 10⁻³} for each (M ∈ {2..11},
-scheme ∈ {TE, SA, LS}). This module byte-matches that table at paper
-precision (2 decimal places ≡ 0.005 tolerance).
+scheme ∈ {TE, SA, LS}). This module matches that table to
+paper-print precision (2 decimal places ± `TABLE_4_TOL = 0.012`
+tolerance — absorbs binary-search + integration noise on top of the
+paper's 0.005 print-rounding bound). The matching is tolerance-
+bounded, NOT byte-equal.
 
 Qualitative invariants additionally tested:
   - u_TE < u_SA < u_LS at every (ε, M)  [paper claim: SA/LS widen the
@@ -47,8 +51,15 @@ from yang2015_dispersion import (  # noqa: E402
 # Tightened from the initial 0.03 after Codex G1 (2026-05-27) found
 # two OCR transcription typos that the loose tolerance had masked
 # (Table 4 ε=1e-6 M=11 LS, ε=1e-5 M=5 TE). Per pre-flight YF1 the
-# byte-match tolerance MUST surface real transcription errors —
+# paper-precision tolerance MUST surface real transcription errors —
 # loose tolerance is a documented anti-pattern.
+#
+# Phase Y/1.5b 2026-05-28 — relabeled from "byte-match" to
+# "paper-print-precision match" per Codex round-2 review:
+# TABLE_4_TOL = 0.012 exceeds the strict 2-decimal print rounding
+# bound (±0.005) by ~2.4× to absorb binary-search + integration
+# noise. This is honestly a tolerance-bounded match, NOT a
+# byte-match.
 TABLE_4_TOL = 0.012
 
 
@@ -59,18 +70,26 @@ _M_VALUES = sorted(YANG_2015_TABLE_4[1e-3].keys())
 @pytest.mark.parametrize("eps_target", _EPS_TARGETS)
 @pytest.mark.parametrize("M", _M_VALUES)
 @pytest.mark.parametrize("scheme", ["TE", "SA", "LS"])
-def test_table_4_byte_match(eps_target: float, M: int, scheme: str):
-    """Byte-match Yang 2015 Table 4 (u-values where ε hits threshold).
+def test_table_4_paper_precision_match(
+    eps_target: float, M: int, scheme: str
+):
+    """Paper-print-precision match for Yang 2015 Table 4 (u-values
+    where ε first hits threshold).
 
     For each (ε, M, scheme): solve for u via binary search such that
     the scheme's RMS error equals ε_target. Match against paper Table 4
-    to paper precision (2 decimal places).
+    to 2-decimal paper precision ± TABLE_4_TOL = 0.012.
+
+    NOTE (Phase Y/1.5b): this is a tolerance-bounded
+    "compute matches paper print" gate, NOT a byte-match
+    assertion. The tolerance bound is documented above.
     """
     u_computed = find_u_for_target_error(M, eps_target, scheme)
     u_paper = YANG_2015_TABLE_4[eps_target][M][scheme]
     diff = abs(u_computed - u_paper)
     assert diff < TABLE_4_TOL, (
-        f"Table 4 byte-match FAIL: ε={eps_target:.0e}, M={M}, scheme={scheme}\n"
+        f"Table 4 paper-precision match FAIL: ε={eps_target:.0e}, "
+        f"M={M}, scheme={scheme}\n"
         f"  computed u = {u_computed:.4f}\n"
         f"  paper u    = {u_paper:.2f}\n"
         f"  |diff|     = {diff:.4f}  (tol {TABLE_4_TOL})")

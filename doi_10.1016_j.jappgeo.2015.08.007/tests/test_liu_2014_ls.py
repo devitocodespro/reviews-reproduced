@@ -1,4 +1,4 @@
-"""Liu 2014 GJI 197:1033 — LS algorithm byte-match gate.
+"""Liu 2014 GJI 197:1033 — LS algorithm paper-print-precision gate.
 
 Independent reproduction of Liu 2014 §2.1 via the closed-form
 (M-1)×(M-1) linear solve (Eq 10-12) + Eq 9 constraint. Verifies
@@ -44,7 +44,7 @@ def test_solve_matches_table_3_at_eta_1e_minus_4(M: int):
     Table 3 row M to 7 sig figs at η = 10⁻⁴.
 
     This is the LOAD-BEARING test — if it fails, either the
-    closed-form solve has a bug OR the byte-transcribed Table
+    closed-form solve has a bug OR the hand-transcribed Table
     is wrong. Either way, fix before claiming reproduction.
     """
     b = LIU_2014_TABLE_2_B_ETA_1E_MINUS_4[M]
@@ -62,7 +62,7 @@ def test_solve_matches_table_3_at_eta_1e_minus_4(M: int):
            for i in range(M) if diffs[i] > PAPER_BYTE_MATCH_TOL]
 
     assert not bad, (
-        f"M={M}, b={b}: byte-match FAIL for c_{[t[0] for t in bad]} "
+        f"M={M}, b={b}: paper-precision match FAIL for c_{[t[0] for t in bad]} "
         f"(max diff {max_diff:.3e} > {PAPER_BYTE_MATCH_TOL:.0e}).\n"
         + "\n".join(f"  c_{i}: computed={cc:.7e}  paper={cp:.7e}  "
                     f"|diff|={d:.3e}"

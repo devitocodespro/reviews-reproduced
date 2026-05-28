@@ -1,15 +1,33 @@
-"""Yang 2015 RSG-TTI TE/SA/LS RSFD solvers — byte-match gates.
+"""Yang 2015 RSG-TTI TE/SA/LS RSFD solvers — paper-print-precision gates.
 
 Independent reproduction of Yang 2015 *J. Appl. Geophys.* 122:40-52
 §3.1 (TE-based), §3.2 (SA-based), §3.3 (LS-based) RSFD coefficient
 solvers. Verifies the solvers reproduce Tables 1, 2, 3 of the paper
-(pages 43-44) to print precision (7 sig figs).
+(pages 43-44) to per-method tolerances:
+  - TE: 5e-7 (sympy-rational, fp64-noise-level match to paper print)
+  - SA: 1e-5 (scipy numerical quadrature + linear solve)
+  - LS: 1e-4 (scipy LS via integrate.quad + linear solve)
+See `PAPER_BYTE_MATCH_TOL_TE / SA / LS` below — these are the
+load-bearing tolerance identifiers (historical Python names; the
+identifier is unchanged, but the natural-language framing of the
+test outcome is "paper-print-precision match within the named
+tolerance", NOT byte-equality).
 
 This is the LOAD-BEARING test for Y.5 (independent cross-check of the
-byte-transcribed coefficient tables against scipy/numpy re-derivation).
-Together with the Liu 2014 LS and Yang/Yan/Liu 2015 GP SA antecedent
-byte-match tests, it provides the full non-tautological independent
-re-derivation that closes pre-flight dual-reviewer YF2.
+hand-transcribed coefficient tables against scipy/numpy
+re-derivation). Together with the Liu 2014 LS and Yang/Yan/Liu 2015
+GP SA antecedent paper-print-precision tests, it provides the full
+non-tautological independent re-derivation that closes pre-flight
+dual-reviewer YF2.
+
+Phase Y/1.5b 2026-05-28: relabeled module/section headers and
+assertion-failure messages from "byte-match" to
+"paper-print-precision match" — the static-dict entries match
+paper print at 7-sig-fig precision (after 10 transcription typo
+fixes; see reproduction README "Transcription corrections"),
+and the algorithm's runtime output matches the static dicts
+within the per-method tolerances. The combined chain is honest
+to paper-print precision, NOT to fp64 byte-equality.
 
 Run: `uv run pytest tests/test_yang2015_rsfd_solvers.py -v`
 """
@@ -35,10 +53,13 @@ from yang2015_rsfd_solvers import (  # noqa: E402
 
 
 # Paper print precision: 7 sig figs at coefficient magnitudes up to ~1.3.
-# TE byte-match uses sympy-rational exact computation (no fp64 noise),
+# TE check uses sympy-rational exact computation (no fp64 noise),
 # so use tight 5e-7 tolerance. SA + LS use fp64 numerical quadrature
 # + scipy.linalg.solve which introduces ~1e-6 noise at high M; use
-# 5e-6 tolerance for those.
+# 1e-5 / 1e-4 tolerances for those. The "PAPER_BYTE_MATCH_TOL_*"
+# identifier names are historical; per Phase Y/1.5b the natural-
+# language framing is "paper-print-precision match" (tolerance-
+# bounded), NOT byte-equality. See module docstring.
 PAPER_BYTE_MATCH_TOL_TE = 5e-7
 PAPER_BYTE_MATCH_TOL_SA = 1e-5
 PAPER_BYTE_MATCH_TOL_LS = 1e-4
@@ -50,12 +71,13 @@ PAPER_BYTE_MATCH_TOL_LS = 1e-4
 CONSTRAINT_TOL = 5e-4
 
 
-# ─── Table 1 (TE-based RSFD) byte-match ─────────────────────────────────
+# ─── Table 1 (TE-based RSFD) paper-print-precision match ────────────────
 
 @pytest.mark.parametrize("M", sorted(YANG_2015_TABLE_1_TE.keys()))
 def test_solve_te_rsfd_matches_table_1(M: int):
-    """Byte-match: solve_te_rsfd(M) reproduces Yang 2015 Table 1 row M
-    to 7 sig figs.
+    """Paper-print-precision match: solve_te_rsfd(M) reproduces
+    Yang 2015 Table 1 row M to 7 sig figs (within
+    PAPER_BYTE_MATCH_TOL_TE = 5e-7).
     """
     a_computed = solve_te_rsfd(M)
     a_paper = np.array(YANG_2015_TABLE_1_TE[M])
@@ -67,18 +89,19 @@ def test_solve_te_rsfd_matches_table_1(M: int):
             float(diffs[i]))
            for i in range(M) if diffs[i] > PAPER_BYTE_MATCH_TOL_TE]
     assert not bad, (
-        f"TE M={M}: byte-match FAIL  max diff {max_diff:.3e} > "
-        f"{PAPER_BYTE_MATCH_TOL_TE:.0e}.\n"
+        f"TE M={M}: paper-precision match FAIL  "
+        f"max diff {max_diff:.3e} > {PAPER_BYTE_MATCH_TOL_TE:.0e}.\n"
         + "\n".join(f"  a_{i}: computed={cc:.7e}  paper={cp:.7e}  "
                     f"|diff|={d:.3e}"
                     for (i, cc, cp, d) in bad))
 
 
-# ─── Table 2 (SA-based RSFD, u=1.10) byte-match ─────────────────────────
+# ─── Table 2 (SA-based RSFD, u=1.10) paper-print-precision match ────────
 
 @pytest.mark.parametrize("M", sorted(YANG_2015_TABLE_2_SA_U_1P10.keys()))
 def test_solve_sa_rsfd_matches_table_2(M: int):
-    """Byte-match: solve_sa_rsfd(M, u=1.10) reproduces Yang 2015 Table 2."""
+    """Paper-print-precision match: solve_sa_rsfd(M, u=1.10) reproduces
+    Yang 2015 Table 2 within PAPER_BYTE_MATCH_TOL_SA = 1e-5."""
     a_computed = solve_sa_rsfd(M, u=1.10)
     a_paper = np.array(YANG_2015_TABLE_2_SA_U_1P10[M])
     assert a_computed.shape == a_paper.shape
@@ -89,17 +112,19 @@ def test_solve_sa_rsfd_matches_table_2(M: int):
             float(diffs[i]))
            for i in range(M) if diffs[i] > PAPER_BYTE_MATCH_TOL_SA]
     assert not bad, (
-        f"SA M={M}, u=1.10: byte-match FAIL  max diff {max_diff:.3e}.\n"
+        f"SA M={M}, u=1.10: paper-precision match FAIL  "
+        f"max diff {max_diff:.3e}.\n"
         + "\n".join(f"  a_{i}: computed={cc:.7e}  paper={cp:.7e}  "
                     f"|diff|={d:.3e}"
                     for (i, cc, cp, d) in bad))
 
 
-# ─── Table 3 (LS-based RSFD, u=1.10) byte-match ─────────────────────────
+# ─── Table 3 (LS-based RSFD, u=1.10) paper-print-precision match ────────
 
 @pytest.mark.parametrize("M", sorted(YANG_2015_TABLE_3_LS_U_1P10.keys()))
 def test_solve_ls_rsfd_matches_table_3(M: int):
-    """Byte-match: solve_ls_rsfd(M, u=1.10) reproduces Yang 2015 Table 3."""
+    """Paper-print-precision match: solve_ls_rsfd(M, u=1.10) reproduces
+    Yang 2015 Table 3 within PAPER_BYTE_MATCH_TOL_LS = 1e-4."""
     a_computed = solve_ls_rsfd(M, u=1.10)
     a_paper = np.array(YANG_2015_TABLE_3_LS_U_1P10[M])
     assert a_computed.shape == a_paper.shape
@@ -110,7 +135,8 @@ def test_solve_ls_rsfd_matches_table_3(M: int):
             float(diffs[i]))
            for i in range(M) if diffs[i] > PAPER_BYTE_MATCH_TOL_LS]
     assert not bad, (
-        f"LS M={M}, u=1.10: byte-match FAIL  max diff {max_diff:.3e}.\n"
+        f"LS M={M}, u=1.10: paper-precision match FAIL  "
+        f"max diff {max_diff:.3e}.\n"
         + "\n".join(f"  a_{i}: computed={cc:.7e}  paper={cp:.7e}  "
                     f"|diff|={d:.3e}"
                     for (i, cc, cp, d) in bad))

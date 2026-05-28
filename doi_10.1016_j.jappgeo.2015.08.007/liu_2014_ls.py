@@ -64,7 +64,7 @@ are from Table 2 (p. 1035) at η = 10⁻⁴:
 
 Test `tests/test_liu_2014_ls.py` calls this module's
 `solve_liu_2014_ls(M, b)` and asserts the result matches the
-paper-byte-transcribed Table 3 to 7 sig figs (paper print
+paper-hand-transcribed Table 3 to 7 sig figs (paper print
 precision).
 """
 from __future__ import annotations
