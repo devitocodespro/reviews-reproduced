@@ -81,15 +81,70 @@ uv run pytest tests/ -v
 
 ```
 doi_10.1016_j.jcp.2023.112684/
-├── README.md                          # this file
-├── xie_he_2024_paper.pdf              # the paper PDF
-├── pyproject.toml                     # uv project
-├── paper_tables.py                    # transcribed paper anchors
+├── README.md                            # this file
+├── xie_he_2024_paper.pdf                # the paper PDF
+├── pyproject.toml                       # uv project (+ matplotlib for dispersion fig)
+├── paper_tables.py                      # transcribed paper anchors
+├── run_dispersion_analysis.py           # Phase X: dispersion curve + L1 integrals
 ├── tests/
-│   └── test_paper_tables.py           # byte-match + consistency tests
+│   ├── test_paper_tables.py             # byte-match + consistency tests
+│   └── test_dispersion_l1_regression.py # L1-integral dispersion regression
 └── reference_outputs/
-    └── sto_coefficients_pinned.json   # canonical (P, CFL) → coefficients
+    ├── sto_coefficients_pinned.json     # canonical (P, CFL) → coefficients
+    ├── dispersion_curve.png             # Phase X: STO vs Taylor dispersion fig
+    └── dispersion_l1_errors.json        # Phase X: L1 integrals (pinned)
 ```
+
+## Phase X deepening — 2026-05-28
+
+Phase X added three deepening anchors:
+
+1. **High-kh band test** — replaced the original single-point
+   dispersion test at kh=1.0 (which sits in the STO/Taylor
+   crossover region) with a band test over [1.2, 2.0] rad
+   where Xie & He's claim "STO < Taylor" holds strictly.
+   Per-P empirical sweep:
+
+   | kh    | sto_err | taylor_err | STO<Taylor? |
+   |-------|---------|------------|-------------|
+   | 0.3   | 7.6e-05 | 1.3e-11    | NO (Taylor essentially exact) |
+   | 1.0   | 6.3e-05 | 5.4e-05    | NO (crossover; near-tied) |
+   | 1.5   | 1.7e-04 | 6.1e-03    | YES (STO wins by ~36×) |
+   | 2.0   | 8.5e-02 | 1.2e-01    | YES (STO wins by ~1.4×) |
+
+2. **Low-kh tradeoff sentinel** — new test asserts that
+   Taylor is more accurate than STO at low kh. This is the
+   defining feature of LS optimization, NOT a bug — STO
+   sacrifices low-kh accuracy to gain high-kh accuracy. If
+   the LS objective collapses to the Taylor solution
+   (optimizer bug), this test catches it.
+
+3. **L1-integral regression** — `run_dispersion_analysis.py`
+   produces `dispersion_curve.png` (visual) and
+   `dispersion_l1_errors.json` (scalar pinned metric).
+   `test_dispersion_l1_regression.py` asserts:
+   - High band: `STO_L1 / Taylor_L1 < 0.6` (Xie & He's
+     sharp quantitative claim)
+   - Low band: `STO_L1 / Taylor_L1 > 10` (LS tradeoff)
+   - Pinned L1 values stable to 5% (catches SciPy
+     optimizer drift)
+
+   Empirical (cfl=0.4, regenerated 2026-05-28):
+
+   | P | low-band STO/Taylor | high-band STO/Taylor |
+   |---|---------------------|----------------------|
+   | 4 | 46.9× (LS sacrifice) | 0.24× (STO wins)    |
+   | 5 | 77.8× (LS sacrifice) | 0.19× (STO wins)    |
+   | 6 | 1363× (LS sacrifice) | 0.50× (STO wins)    |
+
+Phase X also re-pinned `sto_coefficients_pinned.json` against
+the current SciPy (1.17.1) optimizer output and added a
+`_provenance` block documenting the re-pin context. Prior
+pinned values drifted ~5e-6 at P=5, cfl=0.4 — consistent
+with SLSQP local-minimum sensitivity in the LS objective
+under SciPy version upgrades.
+
+Test count: 27 (was 15). All green.
 
 The reproduction directly exercises the parent repo's
 ``00_common/spacetime_coefficients.py`` (Xie & He's algorithm

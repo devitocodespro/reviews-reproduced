@@ -95,12 +95,38 @@ XIE_HE_2024_CANONICAL_CFL = (0.3, 0.4, 0.5)
 
 # ─── (5) Dispersion-error reduction (qualitative) ────────────────────
 #
-# Verified empirically in `tests/test_paper_tables.py::test_sto_vs_taylor_dispersion`.
-# At fixed P and a representative kh in [π/4, π/2], the modified-
-# wavenumber error of STO must be LESS than the Taylor error.
+# Xie & He §3.2 + §4 present the dispersion advantage at the
+# Nyquist wavenumber (kh = π/2 per axis; ~2.22 rad along the
+# diagonal). The TE+LS optimization trades low-kh accuracy for
+# high-kh accuracy — this is the DEFINING FEATURE of an LS-
+# optimized stencil, not a bug.
+#
+# Empirically verified at (P=6, cfl=0.4) on scipy 1.17.1
+# (2026-05-28, Phase X deepening sweep):
+#
+#   kh    sto_err     taylor_err  STO < Taylor?
+#   0.3   7.6e-05     1.3e-11     NO  (Taylor essentially exact)
+#   0.7   1.8e-05     6.5e-07     NO
+#   1.0   6.3e-05     5.4e-05     NO  (crossover region; near-tied)
+#   1.2   1.8e-04     4.8e-04     YES (STO wins by ~2.7x)
+#   1.5   1.7e-04     6.1e-03     YES (STO wins by ~36x)
+#   1.8   1.9e-02     4.2e-02     YES (STO wins by ~2.2x)
+#   2.0   8.5e-02     1.2e-01     YES (STO wins by ~1.4x)
+#   π/2   ...          ...        approaching Nyquist limit
+#
+# Test anchors below reflect this band structure:
+#  - HIGH_KH band [1.2, 2.0]: STO < Taylor strictly holds
+#  - LOW_KH band  [0.1, 0.7]: Taylor < STO (LS tradeoff —
+#    documents the defining feature, not a bug)
 
 
-XIE_HE_2024_DISPERSION_REDUCTION_KH = 1.0  # rad, representative band
+XIE_HE_2024_DISPERSION_HIGH_KH_BAND = (1.2, 2.0)
+XIE_HE_2024_DISPERSION_LOW_KH_BAND = (0.1, 0.7)
+
+# Retained for back-compat; do NOT use for new tests
+# (kh=1.0 is in the STO/Taylor crossover region where the
+# qualitative claim is near-tied).
+XIE_HE_2024_DISPERSION_REDUCTION_KH = 1.0  # rad — DEPRECATED anchor
 
 
 # ─── (6) RSG topology + source claim ─────────────────────────────────

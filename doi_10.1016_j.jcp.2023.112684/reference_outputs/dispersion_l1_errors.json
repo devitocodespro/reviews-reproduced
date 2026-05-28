@@ -1,0 +1,45 @@
+{
+  "_provenance": {
+    "generated": "2026-05-28",
+    "cfl": 0.4,
+    "low_band": [
+      0.1,
+      0.7
+    ],
+    "high_band": [
+      1.2,
+      2.0
+    ],
+    "note": "L1 integrals of |modified_wavenumber_error| over low and high kh bands. Used by tests/test_dispersion_l1_regression.py as a robust replacement for single-point dispersion tests. Re-pin after intentional optimizer/objective changes by re-running run_dispersion_analysis.py."
+  },
+  "P4": {
+    "low_band": {
+      "taylor_l1": 3.9512238070771385e-06,
+      "sto_l1": 0.00018543091879564077
+    },
+    "high_band": {
+      "taylor_l1": 0.06430121528010914,
+      "sto_l1": 0.015480258219411984
+    }
+  },
+  "P5": {
+    "low_band": {
+      "taylor_l1": 3.524803716092179e-07,
+      "sto_l1": 2.7426736492114665e-05
+    },
+    "high_band": {
+      "taylor_l1": 0.036223018740466566,
+      "sto_l1": 0.006793128410478267
+    }
+  },
+  "P6": {
+    "low_band": {
+      "taylor_l1": 3.2808801620264796e-08,
+      "sto_l1": 4.472534292565067e-05
+    },
+    "high_band": {
+      "taylor_l1": 0.021036627469273633,
+      "sto_l1": 0.010533430130572669
+    }
+  }
+}
