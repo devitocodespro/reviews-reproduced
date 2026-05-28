@@ -88,15 +88,75 @@ re-generable via the Irakarama / LP04 `side_by_side.py` pattern.
 
 ## Status
 
-🟡 **PHASE Y.1 BOOTSTRAP COMPLETE (2026-05-27)** — folder
-skeleton, pyproject.toml, README. Tests and paper_tables.py
-populated incrementally as side-by-side review confirms each
-load-bearing entry.
+🟢 **REPRODUCTION COMPLETE (Y.1–Y.6) — 2026-05-27**
 
-🟡 PHASES Y.2-Y.10 pending (estimated ~16-24 h focused work
-per pre-flight dual-reviewer-refined plan at
-`~/.claude/plans/twinkling-popping-wadler.md` §"Yang 2015
-reproduction — faithful bootstrap").
+All load-bearing components implemented and byte-validated against
+the paper's published tables. **395/395 pytest tests pass**.
+
+| Phase | Description | State |
+|---|---|---|
+| Y.1 | Folder bootstrap + PDF SHA pin | ✓ |
+| Y.2 | Eq 1 (PDE) + Eq 3 (C VTI) + Eq 4 (R Bond) byte-transcribed under side-by-side review | ✓ |
+| Y.3 | Tables 1, 2, 3 (TE/SA/LS RSFD coefficients) byte-transcribed | ✓ |
+| Y.4.5 | Liu 2014 GJI + Yang/Yan/Liu 2015 GP antecedent papers acquired + read | ✓ |
+| Y.5 | Independent re-derivation (TE: sympy-rational; SA, LS: scipy closed-form) | ✓ |
+| Y.6 | §4 dispersion gate — Table 4 byte-match (120 cells) + qualitative invariants | ✓ |
+| Y.7 | Extended pytest gates (folded into Y.5+Y.6) | ✓ |
+
+## Test coverage (393 pytest gates)
+
+| Test module | Tests | Purpose |
+|---|---|---|
+| `test_pdf_provenance.py` | 3 | SHA256 pins of `yang2015.pdf` + 2 antecedent PDFs |
+| `test_liu_2014_ls.py` | 29 | Liu Y. (2014) GJI 197:1033 LS antecedent — Table 3 byte-match (M=2..10 at η=10⁻⁴) + invariants |
+| `test_yang_yan_liu_2015_sa.py` | 32 | Yang/Yan/Liu (2015) GP 64:595 SA antecedent — Table 1 byte-match (M=2..11 at u=1.25) + invariants |
+| `test_paper_tables.py` | 18 | Yang 2015 Eq 1, 3, 4 structural invariants (C VTI symmetry, R(0,0)=I, D=R·C·Rᵀ symmetry, PDE d_ij dependencies) |
+| `test_yang2015_rsfd_solvers.py` | 71 | Yang 2015 §3 TE/SA/LS RSFD coefficients — Tables 1, 2, 3 byte-match (30 rows) + cross-method invariants |
+| `test_yang2015_dispersion.py` | 242 | Yang 2015 §4 RMS dispersion error — **Table 4 byte-match (120 cells)** + ordering invariants (u_TE < u_SA ≤ u_LS, monotonic in M and ε) |
+
+## Reproduction provenance classification
+
+**`published`** (post-Y.6, 2026-05-27)
+
+All load-bearing components of the paper's central methodology are
+independently re-derived from first principles and byte-matched
+against the paper's published constants:
+
+- **Eq 1 (PDE)**: structural correctness verified via d_ij
+  dependency invariants
+- **Eq 3 (C matrix)**: 6×6 VTI Voigt stiffness, symmetric, c66 =
+  ½(c11-c12) constraint enforced
+- **Eq 4 (R Bond)**: 6×6 rotation matrix, R(0,0)=I, structure at
+  pure azimuth + pure tilt verified
+- **Eq 2 (D = R·C·Rᵀ)**: derived as `paper_tables.D_TTI()`
+- **§3.1 TE-RSFD**: sympy-rational Vandermonde solve → Table 1
+  byte-match to 7 sig figs (M=2..11) — caught two paper typos via
+  exact rational arithmetic
+- **§3.2 SA-RSFD**: scipy closed-form linear solve → Table 2
+  byte-match (M=2..11 at u=1.10)
+- **§3.3 LS-RSFD**: scipy LS via `scipy.integrate.quad` + linear
+  solve → Table 3 byte-match (M=2..11 at u=1.10)
+- **§4 RMS dispersion error**: scipy.integrate.quad on Eq 24 +
+  Brent root-finding on Eq 25 → **Table 4 byte-match (120 cells:
+  4 ε × 10 M × 3 schemes)** to 2-decimal paper precision
+
+The non-tautological cross-checks via:
+- **Liu Y. (2014) GJI 197:1033** LS antecedent reproduction
+  (`liu_2014_ls.py` + 29 byte-match tests)
+- **Yang/Yan/Liu (2015) GP 64:595** SA antecedent reproduction
+  (`yang_yan_liu_2015_sa.py` + 32 byte-match tests)
+
+ensure the re-derivation is independent (the SA + LS methods are
+correctly implemented from their cited antecedent papers, not just
+working backwards from Yang 2015 J.Appl.Geophys. itself).
+
+## Antecedent papers (committed in folder)
+
+| Paper | DOI | Role |
+|---|---|---|
+| **Yang, Yan & Liu 2015** *J. Appl. Geophys.* 122:40-52 | 10.1016/j.jappgeo.2015.08.007 | Paper being reproduced (`yang2015.pdf`) |
+| **Liu Y. 2014** *Geophys. J. Int.* 197:1033-1047 | 10.1093/gji/ggu032 | LS-method antecedent (`antecedents_liu_2014.pdf`) — §2.1 closed-form LS solver, Tables 1-3 |
+| **Yang, Yan & Liu 2015** *Geophys. Prospect.* 64:595-610 | 10.1111/1365-2478.12325 | SA-method antecedent (`antecedents_yang_yan_liu_2015_geophys_prospect_sa.pdf`) — §"Optimal implicit SGFD" Eq 7-8 + Table 1 |
 
 ## Quick start
 

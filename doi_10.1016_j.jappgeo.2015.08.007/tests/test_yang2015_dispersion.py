@@ -39,15 +39,17 @@ from yang2015_dispersion import (  # noqa: E402
 
 
 # Paper print precision: 2 decimal places (paper-rounded to 0.01).
-# Tolerance 0.03 absolute allows for:
+# Tolerance 0.012 allows for:
 #   - paper's 2-decimal rounding (±0.005)
-#   - binary-search xtol=1e-4 on u
-#   - SA/LS optimisation re-solving at each u producing slight
-#     variations where the error crosses the threshold
-#   - paper's integration scheme may differ slightly from
-#     scipy.integrate.quad (Gauss vs Simpson vs trapezoidal)
-# Empirically calibrated so all 120 (ε, M, scheme) cells pass.
-TABLE_4_TOL = 0.03
+#   - binary-search xtol=1e-4 on u + integration noise (~0.001)
+#   - small drift from how the paper's integration scheme may differ
+#     from scipy.integrate.quad
+# Tightened from the initial 0.03 after Codex G1 (2026-05-27) found
+# two OCR transcription typos that the loose tolerance had masked
+# (Table 4 ε=1e-6 M=11 LS, ε=1e-5 M=5 TE). Per pre-flight YF1 the
+# byte-match tolerance MUST surface real transcription errors —
+# loose tolerance is a documented anti-pattern.
+TABLE_4_TOL = 0.012
 
 
 _EPS_TARGETS = sorted(YANG_2015_TABLE_4.keys())

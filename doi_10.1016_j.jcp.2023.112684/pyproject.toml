@@ -1,0 +1,15 @@
+[project]
+name = "xie-he-2024-sto-rsg-reproduction"
+version = "0.1.0"
+description = "Reproduction of Xie & He 2024 (J. Comput. Phys. 499:112684) STO-RSG TE+LS-optimized RSG scheme"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "pytest>=8.0",
+]
+
+[tool.uv]
+package = false
