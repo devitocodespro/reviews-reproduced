@@ -1,0 +1,25 @@
+[project]
+name = "vishnevsky-lisitsa-2014-reproduction"
+version = "0.1.0"
+description = "Reproduction of Vishnevsky, Lisitsa, Tcheverda, Reshetova 2014 — Numerical study of interface errors of FD simulations of seismic waves (Geophysics 79(4):T219-T232, DOI 10.1190/geo2013-0299.1)"
+authors = [{name = "Gerard Gorman", email = "gerard@devitocodes.com"}]
+requires-python = ">=3.10"
+
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "sympy>=1.12",
+    "matplotlib>=3.8",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+packages = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
