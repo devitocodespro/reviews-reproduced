@@ -163,13 +163,50 @@ def test_horizontal_solid_solid_all_2nd_order():
     assert pred['LS'] == 4.0
 
 
-def test_inclined_interfaces_all_degrade_to_1st_order():
+def test_inclined_solid_solid_iso_degrades_to_1st_order():
     """Per §"Conclusion" + Figure 8: all schemes degrade to 1st at
-    inclined interfaces (staircase approximation)."""
+    inclined SOLID-SOLID interfaces (staircase approximation)."""
     pred = pt.CONVERGENCE_PREDICTIONS['inclined_solid_solid_iso']
     assert pred['SSGS'] == 2.0
     assert pred['RSGS'] == 2.0
     assert pred['LS'] == 2.0
+
+
+def test_inclined_fluid_solid_below_first_order_per_paper():
+    """Per page T225: at inclined fluid/solid interfaces, the
+    paper explicitly states first-order convergence was NOT
+    observed. This is BELOW the project's ≈1st-order indicator
+    threshold (δ=2.0), so the corresponding scheme cells must
+    encode `None` and carry the verbatim paper_quote.
+
+    Field-test 2026-05-28 caught the prior numeric (2.0)
+    encoding as a Rule 1 silent-strengthening violation; this
+    test locks in the corrected encoding (Phase Y/1.5a)."""
+    verbatim = (
+        "did not even observe a convergence of the first order "
+        "for the fluid/solid interface"
+    )
+    for key in (
+        'inclined_fluid_isotropic_solid',
+        'inclined_fluid_anisotropic_solid',
+    ):
+        pred = pt.CONVERGENCE_PREDICTIONS[key]
+        for scheme in pred:
+            if scheme in {'SSGS', 'RSGS', 'LS'}:
+                assert pred[scheme] is None, (
+                    f"{key}.{scheme} = {pred[scheme]!r} but paper "
+                    f"says < 1st-order; must encode as None to avoid "
+                    f"silent strengthening to ≈1st-order indicator."
+                )
+        assert 'paper_quote' in pred, (
+            f"{key} missing required paper_quote field — verbatim "
+            f"paper language is the load-bearing artifact for a "
+            f"None-encoded cell."
+        )
+        assert verbatim in pred['paper_quote'], (
+            f"{key}.paper_quote missing verbatim claim from page "
+            f"T225: {verbatim!r}"
+        )
 
 
 def test_abstract_load_bearing_claim_present():

@@ -229,17 +229,37 @@ CONVERGENCE_PREDICTIONS = {
             'model, which was confirmed by the numerical '
             'experiments.'),
     },
+    # Inclined fluid-solid is the load-bearing exception: per page
+    # T225, the paper explicitly states that *first-order convergence
+    # was not even observed* at inclined fluid-solid interfaces. This
+    # is BELOW the 1st-order indicator threshold of δ=2.0, so a
+    # numeric encoding here would be a silent strengthening of the
+    # paper's claim. Encode as `None` per the explicit `paper_quote`.
+    # (Field-test 2026-05-28 caught this as a Rule 1
+    # silent-strengthening violation; fix is Phase Y/1.5a.)
     'inclined_fluid_isotropic_solid': {
-        'SSGS': 2.0, 'RSGS': 2.0, 'LS': 2.0,
+        'SSGS': None, 'RSGS': None, 'LS': None,
         'source': 'Figure 9 (page T225)',
+        'paper_quote': (
+            'Moreover, we did not even observe a convergence of the '
+            'first order for the fluid/solid interface, which was '
+            'likely the result of the staircase approximation of the '
+            'interface.'),
     },
     'inclined_solid_solid_aniso': {
         'RSGS': 2.0, 'LS': 2.0,
         'source': 'Figure 10 (page T225)',
     },
+    # Same statement on T225 applies generally to "the fluid/solid
+    # interface" — covers Figure 11 (anisotropic-solid variant) too.
     'inclined_fluid_anisotropic_solid': {
-        'RSGS': 2.0, 'LS': 2.0,
+        'RSGS': None, 'LS': None,
         'source': 'Figure 11 (page T225)',
+        'paper_quote': (
+            'Moreover, we did not even observe a convergence of the '
+            'first order for the fluid/solid interface, which was '
+            'likely the result of the staircase approximation of the '
+            'interface.'),
     },
 
     # Corner problems (3 adjacent media meeting at a vertex)

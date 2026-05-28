@@ -29,8 +29,34 @@ Plus, from §"Conclusion":
 > density and finely layered media averaging for the stiffness
 > tensor in the vicinity of the interface."
 
-The Petrobras configuration is EXACTLY the fluid-solid + dipping
-case the paper documents.
+**Scope of this anchor for the Petrobras cohort** (revised
+2026-05-28 Phase Y/1.5a after review-pool field test caught
+an extrapolation):
+
+The paper directly studies **horizontal** fluid-solid interfaces
+(Figures 4-7 + abstract claim) and **inclined solid-solid**
+interfaces (Figures 8, 10). The **Petrobras dipping
+fluid-solid** geometry is NOT directly studied by Vishnevsky
+2014 — it is an *inference* by analogy from two separate
+paper findings:
+
+1. At horizontal fluid-solid (paper's direct case): SSGS
+   preserves 2nd-order; RSGS and LS degrade to 1st-order
+   (the load-bearing ranking).
+2. At inclined fluid-solid (page T225 result): the paper
+   explicitly reports first-order convergence was NOT
+   observed for any scheme — i.e., the staircase
+   approximation of the dipping interface degrades
+   convergence below the inclined solid-solid baseline
+   for ALL three schemes.
+
+So Vishnevsky 2014 supports the cohort's SSGS > RSGS ≈ LS
+*ordering* at the horizontal case, plus a general
+"all schemes degrade further at inclined fluid-solid"
+warning. It does NOT byte-match-anchor a specific
+convergence-rate prediction for the Petrobras dipping
+config — that is engineering judgement informed by the
+paper, not direct evidence from it.
 
 ## What we reproduce
 
@@ -56,13 +82,20 @@ and scalar bounds, not figures), this reproduction focuses on:
    |---|---|---|---|
    | Horizontal solid-solid (iso/aniso, modified) | ≈4 | ≈4 | ≈4 |
    | **Horizontal fluid-solid** | **≈4** | **≈2** | **≈2** |
-   | Inclined (any) | ≈2 | ≈2 | ≈2 |
+   | Inclined solid-solid (any) | ≈2 | ≈2 | ≈2 |
+   | **Inclined fluid-solid** | **< 2 (not observed)** | **< 2** | **< 2** |
    | Corner 3-solids (no fluid) | ≈4 | ≈4 | ≈4 |
    | Corner with fluid | ≈4 | ≈2 | ≈2 |
    | Unmodified (any modification skipped) | <2 | <2 | <2 |
 
-   The fluid-solid row maps directly to the Petrobras
-   water-over-TTI configuration in the parent-repo cohort.
+   The **horizontal** fluid-solid row directly supports the
+   SSGS > RSGS ≈ LS ordering used in the Petrobras cohort
+   ranking. The **inclined** fluid-solid row (page T225)
+   degrades below first-order for all schemes — this informs
+   the cohort's expectation that the Petrobras dipping case
+   is harder than any horizontal one, but does NOT
+   byte-match-anchor a specific rate prediction at the
+   dipping geometry (see "Scope of this anchor" above).
 
 5. **Empirical h-refinement convergence study** (DEFERRED — see
    "Status" below). The intent is to verify δ_k → 4 for SSGS and
@@ -79,13 +112,28 @@ and scalar bounds, not figures), this reproduction focuses on:
 | 4. Qualitative convergence-rate table | ✅ landed | Eqs 12-13 thresholds + Figures 4-16 predictions encoded in `CONVERGENCE_PREDICTIONS`, byte-tested |
 | 5. Empirical h-refinement (SSGS + RSGS NumPy) | ⏳ deferred | `run_reproduction.py` scaffold exists but the small-domain pilot is severely under-resolved at coarse grids (Gaussian σ ≈ 30 m, coarsest dx = 10 m → ~3 cells span FWHM → SO=2 dispersion dominates). Reframing to a wider Gaussian (σ ≈ 100 m) + finer dx range, OR migrating the implementation to Devito's existing M1/M2 production solvers, is the unblock path. Not load-bearing for the parent-repo consistency memo: anchors 1-4 are sufficient to cite this paper as the load-bearing literature reference for the Petrobras cohort ranking. |
 
-The verification gate as it stands (`tests/test_paper_tables.py`,
-14 tests, all green) byte-matches every transcribed constant
-that the parent-repo consistency memo cites. If the empirical
-h-refinement work is re-prioritised, the obvious unblock is to
-reuse the parent's `01_ssg/` and `02_rsg/` Devito solvers instead
-of re-implementing SSGS / RSGS in NumPy from scratch — the
-parent has graduated implementations of both schemes.
+The verification gate (`tests/test_paper_tables.py`, 15 tests,
+all green) anchors every numeric constant transcribed from the
+paper against its source equation/table. Anchor types:
+
+- Test medium constants (IS1/IS2/IS3/IF, AS1/AS2/AS3 Cij): exact
+  equality against the transcribed values.
+- Convergence-indicator predictions: paper's specific
+  numeric/qualitative claim per configuration. Where the paper
+  itself encodes a sub-1st-order claim (inclined fluid-solid,
+  page T225 "did not even observe a convergence of the first
+  order"), the corresponding cells encode `None` plus the
+  verbatim `paper_quote` — preserving the paper's claim
+  WITHOUT silently promoting it to a numerical ≈1st-order
+  indicator. This pattern was added 2026-05-28 (Phase Y/1.5a)
+  after review-pool field test caught the prior numeric
+  encoding as a silent strengthening.
+
+If the empirical h-refinement work is re-prioritised, the
+obvious unblock is to reuse the parent's `01_ssg/` and `02_rsg/`
+Devito solvers instead of re-implementing SSGS / RSGS in NumPy
+from scratch — the parent has graduated implementations of both
+schemes.
 
 ## Engagement context
 
@@ -113,8 +161,30 @@ uv run python run_reproduction.py
 - `paper_tables.py` — byte-transcribed test medium constants +
   qualitative convergence-rate table (load-bearing)
 - `tests/test_paper_tables.py` — pinned-constants regression
-  (14 tests, all green)
+  (15 tests, all green)
 - `run_reproduction.py` — h-refinement convergence sweep
   scaffold (DEFERRED — pilot under-resolved at coarse grids,
   see Status table)
 - `vishnevsky_lisitsa_2014_paper.pdf` — pinned paper PDF
+
+## Graduation review
+
+| Date | Reviewer pool | Template | Verdict |
+|---|---|---|---|
+| 2026-05-28 Run 1 | Codex (structural) → Azure GPT-5 + DeepAgents-Azure (detailed); two-stage | `paper_faithfulness_prompt.md` (QED F2 + F6) | **AGREE** (Stage A AGREE → Stage B AGREE + AGREE) |
+| 2026-05-28 Run 2 (QED stochastic mitigation) | as above | as above | INCONCLUSIVE (Stage A AGREE; Stage B AGREE + timeout) — no substantive DISAGREE; timeout is infrastructure noise |
+
+Prompt: `/tmp/phase1_5a_vishnevsky_fix_verification.md` (Phase
+Y/1.5a fix verification — inlined paper claim from page T225
++ post-fix code block + README scoping section). Per the QED
+protocol: run-2 INCONCLUSIVE caused by DeepAgents timing out
+on the second pass after 600 s; the two prior reviewers
+(Codex + Azure) AGREE'd on both runs with no substantive
+DISAGREE on any of Q1-Q5. Verdict accepted.
+
+Field-test history (this reproduction's pre-fix state):
+- 2026-05-28 review-pool field test caught silent
+  strengthening in `paper_tables.py:232` — encoded
+  `inclined_fluid_isotropic_solid` as `2.0` (≈1st-order
+  indicator) where paper page T225 says first-order was
+  not observed. Fixed in Phase Y/1.5a.
