@@ -8,7 +8,11 @@ requires-python = ">=3.10,<3.14"
 dependencies = [
     "numpy>=1.26",
     "scipy>=1.13",
+    "petersson_sjogreen_2015",
 ]
+
+[tool.uv.sources]
+petersson_sjogreen_2015 = { path = "../doi_10.1016_j.jcp.2015.07.023", editable = true }
 
 [build-system]
 requires = ["setuptools>=68"]

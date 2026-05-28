@@ -85,7 +85,7 @@ def _h3_inv_factor(order=4):
     For order 4 (Mattsson 2004): norm weight at boundary = 17/48,
     so H_3^{-1} = 48/17 / h_dim.
     """
-    from sbp_sat import sbp_boundary_norm_weight
+    from petersson_sjogreen_2015.sbp_sat import sbp_boundary_norm_weight
     weight = sbp_boundary_norm_weight(order=order)
     return float(Fraction(1) / weight)
 
@@ -143,7 +143,7 @@ def seafloor_coupling_eqs_2d_bader_implicit(phi, uy, rho_f, kappa_f,
         Order matters: Devito schedules sequentially.
     """
     from fractions import Fraction
-    from sbp_sat import sbp_boundary_norm_weight
+    from petersson_sjogreen_2015.sbp_sat import sbp_boundary_norm_weight
 
     if order != 4:
         raise NotImplementedError(

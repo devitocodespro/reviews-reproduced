@@ -1,0 +1,18 @@
+[project]
+name = "petersson_sjogreen_2015"
+version = "0.1.0"
+description = "Petersson & Sjögreen (2015) sw4 SBP-SAT — diagonal-norm (4,2) SBP D1/D2 operator reproduction"
+authors = [{ name = "Gerard Gorman", email = "gerard@devitocodes.com" }]
+requires-python = ">=3.10,<3.14"
+
+dependencies = [
+    "numpy>=1.26",
+    "sympy>=1.12",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["petersson_sjogreen_2015*"]
