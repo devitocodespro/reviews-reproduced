@@ -21,7 +21,7 @@ production module implements all three in one file):
 - Kristek, J., Moczo, P., Chaljub, E., & Kristeková, M. (2017). *An
   orthorhombic representation of a heterogeneous medium for the FD
   modelling of seismic wave propagation.* GJI 208(2): 1250-1264.
-  DOI: [10.1093/gji/ggw451](https://doi.org/10.1093/gji/ggw451). —
+  DOI: [10.1093/gji/ggw456](https://doi.org/10.1093/gji/ggw456). —
   Axis-aligned orthorhombic limit (β=0 reduction).
 
 ## Why this reproduction exists

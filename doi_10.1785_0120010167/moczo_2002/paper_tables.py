@@ -13,7 +13,7 @@ Co-anchors:
     Koene, Wittsten & Robertsson (2022) — production rotate-partition-
         average-rotate-back form (Eqs 23-27); DOI 10.1093/gji/ggac164.
     Kristek et al. (2017) — axis-aligned orthorhombic limit;
-        DOI 10.1093/gji/ggw451.
+        DOI 10.1093/gji/ggw456.
 
 The constants exposed here are the **load-bearing form rules** of the
 Moczo 2002 isotropic-effective averaging plus the Schoenberg-Muir

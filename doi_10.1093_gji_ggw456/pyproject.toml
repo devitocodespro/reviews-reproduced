@@ -1,0 +1,17 @@
+[project]
+name = "kristek_2017"
+version = "0.1.0"
+description = "Kristek, Moczo, Chaljub & Kristeková (2017) GJI orthorhombic-representation heterogeneous-medium averaging — reproduction"
+authors = [{ name = "Gerard Gorman", email = "gerard@devitocodes.com" }]
+requires-python = ">=3.10,<3.14"
+
+dependencies = [
+    "numpy>=1.26",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["kristek_2017*"]

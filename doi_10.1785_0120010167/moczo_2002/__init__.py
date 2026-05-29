@@ -27,7 +27,7 @@ because the production module implements all three in one file):
     "An orthorhombic representation of a heterogeneous medium for
     the finite-difference modelling of seismic wave propagation."
     *Geophysical Journal International* 208(2): 1250-1264.
-    DOI: 10.1093/gji/ggw451. (Axis-aligned orthorhombic limit;
+    DOI: 10.1093/gji/ggw456. (Axis-aligned orthorhombic limit;
     reduces from the Schoenberg-Muir form at β=0.)
 
 Module structure:
