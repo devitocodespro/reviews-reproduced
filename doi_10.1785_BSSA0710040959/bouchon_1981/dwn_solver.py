@@ -756,7 +756,7 @@ def dwn_wavefield_acoustic_anisotropic_horizontal(
         lower layer (z <= z_interface) carries vertical
         displacement $u_z$.
     """
-    from anisotropic_rt import acoustic_elastic_reflection
+    from mallick_frazer_1990.anisotropic_rt import acoustic_elastic_reflection
 
     if T_max is None:
         T_max = 1.2 * (t_target if t_target > 0 else 1.0)
@@ -1115,7 +1115,7 @@ def dwn_wavefield_acoustic_elastic_elastic_stack_horizontal(
     C_lower : dict
         Lower-layer (TTI) stiffness, same schema.
     """
-    from anisotropic_rt import acoustic_elastic_elastic_stack_reflection
+    from mallick_frazer_1990.anisotropic_rt import acoustic_elastic_elastic_stack_reflection
 
     z_interface_lower = z_interface_upper - h_middle
 
