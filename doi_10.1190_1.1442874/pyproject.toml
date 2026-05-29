@@ -1,0 +1,17 @@
+[project]
+name = "pratt_1990"
+version = "0.1.0"
+description = "Pratt (1990) line-source projection / 2D acoustic Green's image-method reference — reproduction"
+authors = [{ name = "Gerard Gorman", email = "gerard@devitocodes.com" }]
+requires-python = ">=3.10,<3.14"
+
+dependencies = [
+    "numpy>=1.26",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["pratt_1990*"]
